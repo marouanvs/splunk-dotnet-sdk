@@ -1,0 +1,26 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <Deterministic>true</Deterministic>
+    <IsPackable>false</IsPackable>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Authors>SplunkSdk Contributors</Authors>
+    <Company>SplunkSdk Contributors</Company>
+    <Product>SplunkSdk</Product>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>splunk;splunk-cloud;splunk-enterprise;sdk;search;observability</PackageTags>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <RepositoryUrl Condition="'$(RepositoryUrl)' == '' and '$(GITHUB_SERVER_URL)' != '' and '$(GITHUB_REPOSITORY)' != ''">$(GITHUB_SERVER_URL)/$(GITHUB_REPOSITORY)</RepositoryUrl>
+    <PackageProjectUrl Condition="'$(PackageProjectUrl)' == '' and '$(RepositoryUrl)' != ''">$(RepositoryUrl)</PackageProjectUrl>
+    <PublishRepositoryUrl Condition="'$(RepositoryUrl)' != ''">true</PublishRepositoryUrl>
+    <EmbedUntrackedSources Condition="'$(RepositoryUrl)' != ''">true</EmbedUntrackedSources>
+  </PropertyGroup>
+
+</Project>

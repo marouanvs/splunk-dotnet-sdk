@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/SplunkSdk.Benchmarks/SplunkSdk.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/SplunkSdk.DependencyInjection/SplunkSdk.DependencyInjection.csproj" />
+    <Project Path="src/SplunkSdk/SplunkSdk.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SplunkSdk.IntegrationTests/SplunkSdk.IntegrationTests.csproj" />
+    <Project Path="tests/SplunkSdk.Tests/SplunkSdk.Tests.csproj" />
+  </Folder>
+</Solution>
