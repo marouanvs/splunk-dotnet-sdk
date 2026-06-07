@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>Marouanvs.Splunk</PackageId>
+    <RootNamespace>Marouanvs.Splunk</RootNamespace>
+    <AssemblyName>Marouanvs.Splunk</AssemblyName>
+    <Title>Splunk SDK for .NET</Title>
+    <Description>Production-oriented .NET SDK for querying Splunk Enterprise and Splunk Cloud search indexes with token authentication.</Description>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build, Test, And Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Show .NET info
+        run: dotnet --info
+
+      - name: Restore
+        run: dotnet restore SplunkSdk.slnx --locked-mode
+
+      - name: Verify formatting
+        run: dotnet format SplunkSdk.slnx --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build SplunkSdk.slnx --configuration Release --no-restore
+
+      - name: Unit tests
+        run: dotnet test tests/SplunkSdk.Tests/SplunkSdk.Tests.csproj --configuration Release --no-build
+
+      - name: Integration tests skip check
+        run: dotnet test tests/SplunkSdk.IntegrationTests/SplunkSdk.IntegrationTests.csproj --configuration Release --no-build
+
+      - name: Pack NuGet packages
+        run: |
+          mkdir -p artifacts/packages
+          dotnet pack src/SplunkSdk/SplunkSdk.csproj --configuration Release --no-build --output artifacts/packages
+          dotnet pack src/SplunkSdk.DependencyInjection/SplunkSdk.DependencyInjection.csproj --configuration Release --no-build --output artifacts/packages
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marouanvs-splunk-packages
+          path: |
+            artifacts/packages/*.nupkg
+            artifacts/packages/*.snupkg
+          if-no-files-found: error
+
+      - name: Skill validation
+        run: python3 eng/validate-skill.py skills/splunk-interactions
+
+      - name: Benchmark smoke
+        run: dotnet run --configuration Release --project benchmarks/SplunkSdk.Benchmarks --no-build -- --filter "*QueryBuilderBenchmarks*" --job Dry

@@ -1,0 +1,82 @@
+name: Splunk Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow_mutations:
+        description: "Create/delete saved searches and disabled alerts"
+        required: true
+        default: false
+        type: boolean
+      allow_untrusted_certificates:
+        description: "Allow self-signed certificates for local lab stacks only"
+        required: true
+        default: false
+        type: boolean
+      auth_scheme:
+        description: "Authorization scheme"
+        required: true
+        default: Bearer
+        type: choice
+        options:
+          - Bearer
+          - Splunk
+
+permissions:
+  contents: read
+
+concurrency:
+  group: splunk-integration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: Live Splunk Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: splunk-integration
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore SplunkSdk.slnx --locked-mode
+
+      - name: Build integration project
+        run: dotnet build tests/SplunkSdk.IntegrationTests/SplunkSdk.IntegrationTests.csproj --configuration Release --no-restore
+
+      - name: Validate required secrets
+        env:
+          SPLUNKSDK_INTEGRATION_URI: ${{ secrets.SPLUNKSDK_INTEGRATION_URI }}
+          SPLUNKSDK_INTEGRATION_TOKEN: ${{ secrets.SPLUNKSDK_INTEGRATION_TOKEN }}
+          SPLUNKSDK_INTEGRATION_INDEX: ${{ secrets.SPLUNKSDK_INTEGRATION_INDEX }}
+          SPLUNKSDK_INTEGRATION_SPL: ${{ secrets.SPLUNKSDK_INTEGRATION_SPL }}
+        run: |
+          if [ -z "$SPLUNKSDK_INTEGRATION_URI" ] || [ -z "$SPLUNKSDK_INTEGRATION_TOKEN" ]; then
+            echo "::error::Configure SPLUNKSDK_INTEGRATION_URI and SPLUNKSDK_INTEGRATION_TOKEN secrets."
+            exit 1
+          fi
+
+          if [ -z "$SPLUNKSDK_INTEGRATION_INDEX" ] && [ -z "$SPLUNKSDK_INTEGRATION_SPL" ]; then
+            echo "::error::Configure SPLUNKSDK_INTEGRATION_INDEX for index-backed tests or SPLUNKSDK_INTEGRATION_SPL for the custom raw SPL test."
+            exit 1
+          fi
+
+      - name: Run integration tests
+        env:
+          SPLUNKSDK_INTEGRATION_URI: ${{ secrets.SPLUNKSDK_INTEGRATION_URI }}
+          SPLUNKSDK_INTEGRATION_TOKEN: ${{ secrets.SPLUNKSDK_INTEGRATION_TOKEN }}
+          SPLUNKSDK_INTEGRATION_INDEX: ${{ secrets.SPLUNKSDK_INTEGRATION_INDEX }}
+          SPLUNKSDK_INTEGRATION_SPL: ${{ secrets.SPLUNKSDK_INTEGRATION_SPL }}
+          SPLUNKSDK_INTEGRATION_OWNER: ${{ vars.SPLUNKSDK_INTEGRATION_OWNER }}
+          SPLUNKSDK_INTEGRATION_APP: ${{ vars.SPLUNKSDK_INTEGRATION_APP }}
+          SPLUNKSDK_INTEGRATION_AUTH_SCHEME: ${{ inputs.auth_scheme }}
+          SPLUNKSDK_INTEGRATION_ALLOW_UNTRUSTED_CERTS: ${{ inputs.allow_untrusted_certificates && '1' || '0' }}
+          SPLUNKSDK_INTEGRATION_MUTATE: ${{ inputs.allow_mutations && '1' || '0' }}
+        run: dotnet test tests/SplunkSdk.IntegrationTests/SplunkSdk.IntegrationTests.csproj --configuration Release --no-build

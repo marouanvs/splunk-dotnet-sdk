@@ -1,0 +1,185 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version, for example 0.1.0"
+        required: true
+        type: string
+      publish:
+        description: "Publish packages to NuGet.org"
+        required: true
+        default: false
+        type: boolean
+      baseline_version:
+        description: "Optional package validation baseline version override"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Pack And Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${INPUT_VERSION}"
+          fi
+
+          if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+){2}(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Version '$version' is not a valid SemVer package version."
+            exit 1
+          fi
+
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve package validation baseline
+        id: baseline
+        shell: bash
+        env:
+          INPUT_BASELINE_VERSION: ${{ inputs.baseline_version }}
+          PACKAGE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          baseline="${INPUT_BASELINE_VERSION}"
+
+          if [[ -n "$baseline" ]]; then
+            echo "Using package validation baseline override '$baseline'."
+          else
+            while IFS= read -r tag; do
+              candidate="${tag#v}"
+
+              if [[ ! "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                continue
+              fi
+
+              if [[ "$candidate" == "$PACKAGE_VERSION" ]]; then
+                continue
+              fi
+
+              if [[ "$(printf '%s\n%s\n' "$candidate" "$PACKAGE_VERSION" | sort -V | tail -n 1)" == "$PACKAGE_VERSION" ]]; then
+                baseline="$candidate"
+                break
+              fi
+            done < <(git tag --list 'v*.*.*' --sort=-v:refname)
+
+            if [[ -z "$baseline" ]]; then
+              echo "No prior release tag found; packing without a package validation baseline."
+            else
+              echo "Derived package validation baseline '$baseline' from the previous release tag."
+            fi
+          fi
+
+          echo "value=$baseline" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore SplunkSdk.slnx --locked-mode
+
+      - name: Verify formatting
+        run: dotnet format SplunkSdk.slnx --verify-no-changes --no-restore
+
+      - name: Build
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.value }}
+        run: dotnet build SplunkSdk.slnx --configuration Release --no-restore -p:Version="$PACKAGE_VERSION" -p:PackageVersion="$PACKAGE_VERSION"
+
+      - name: Unit tests
+        run: dotnet test tests/SplunkSdk.Tests/SplunkSdk.Tests.csproj --configuration Release --no-build
+
+      - name: Integration tests skip check
+        run: dotnet test tests/SplunkSdk.IntegrationTests/SplunkSdk.IntegrationTests.csproj --configuration Release --no-build
+
+      - name: Pack
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.value }}
+          BASELINE_VERSION: ${{ steps.baseline.outputs.value }}
+        run: |
+          mkdir -p artifacts/packages
+
+          baseline_args=()
+          if [[ -n "$BASELINE_VERSION" ]]; then
+            baseline_args+=("-p:PackageValidationBaselineVersion=$BASELINE_VERSION")
+          fi
+
+          dotnet pack src/SplunkSdk/SplunkSdk.csproj \
+            --configuration Release \
+            --no-build \
+            --output artifacts/packages \
+            -p:Version="$PACKAGE_VERSION" \
+            -p:PackageVersion="$PACKAGE_VERSION" \
+            "${baseline_args[@]}"
+
+          dotnet pack src/SplunkSdk.DependencyInjection/SplunkSdk.DependencyInjection.csproj \
+            --configuration Release \
+            --no-build \
+            --output artifacts/packages \
+            -p:Version="$PACKAGE_VERSION" \
+            -p:PackageVersion="$PACKAGE_VERSION" \
+            "${baseline_args[@]}"
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marouanvs-splunk-packages-${{ steps.version.outputs.value }}
+          path: |
+            artifacts/packages/*.nupkg
+            artifacts/packages/*.snupkg
+          if-no-files-found: error
+
+      - name: Verify release commit is on main
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+        shell: bash
+        run: |
+          git fetch origin main
+
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::Refusing to publish: commit $GITHUB_SHA is not reachable from origin/main."
+            exit 1
+          fi
+
+      - name: Publish to NuGet
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "::error::NUGET_API_KEY secret is required to publish packages."
+            exit 1
+          fi
+
+          dotnet nuget push artifacts/packages/*.nupkg \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

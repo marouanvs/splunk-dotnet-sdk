@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\SplunkSdk\SplunkSdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>Marouanvs.Splunk.DependencyInjection</PackageId>
+    <RootNamespace>Marouanvs.Splunk.DependencyInjection</RootNamespace>
+    <AssemblyName>Marouanvs.Splunk.DependencyInjection</AssemblyName>
+    <Title>Splunk SDK Dependency Injection</Title>
+    <Description>Microsoft.Extensions.DependencyInjection integration for Marouanvs.Splunk.</Description>
+    <PackageTags>splunk;splunk-cloud;splunk-enterprise;sdk;search;observability;dependency-injection</PackageTags>
+  </PropertyGroup>
+
+</Project>

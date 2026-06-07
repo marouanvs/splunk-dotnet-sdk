@@ -1,0 +1,4 @@
+interface:
+  display_name: "Splunk Interactions"
+  short_description: "Work with Splunk searches and REST APIs"
+  default_prompt: "Use $splunk-interactions to plan and implement safe Splunk searches or SDK changes."
