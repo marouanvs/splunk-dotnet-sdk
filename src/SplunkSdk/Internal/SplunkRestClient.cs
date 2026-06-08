@@ -155,6 +155,19 @@ internal sealed class SplunkRestClient
                     ex.GetType().Name);
                 throw;
             }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                SplunkDiagnostics.SetException(activity, ex);
+                activity?.SetTag("splunk.retry_count", retryCount);
+                SplunkDiagnostics.RecordRestRequestDuration(
+                    stopwatch.Elapsed,
+                    method.Method,
+                    endpoint,
+                    statusCode,
+                    retryCount,
+                    ex.GetType().Name);
+                throw;
+            }
         }
     }
 

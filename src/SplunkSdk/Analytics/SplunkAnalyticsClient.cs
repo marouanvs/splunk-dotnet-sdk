@@ -91,7 +91,7 @@ public sealed class SplunkAnalyticsClient : ISplunkAnalyticsClient
     private static SplunkQueryBuilder BuildBaseQuery(
         string index,
         string? text,
-        IReadOnlyDictionary<string, string> fieldFilters,
+        IReadOnlyDictionary<string, string>? fieldFilters,
         string? rawPredicate)
     {
         var builder = SplunkQueryBuilder.FromIndex(index);
@@ -101,9 +101,12 @@ public sealed class SplunkAnalyticsClient : ISplunkAnalyticsClient
             builder.SearchText(text);
         }
 
-        foreach (var filter in fieldFilters)
+        if (fieldFilters is not null)
         {
-            builder.FieldEquals(filter.Key, filter.Value);
+            foreach (var filter in fieldFilters)
+            {
+                builder.FieldEquals(filter.Key, filter.Value);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(rawPredicate))

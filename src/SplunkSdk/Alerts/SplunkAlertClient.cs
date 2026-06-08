@@ -30,7 +30,9 @@ public sealed class SplunkAlertClient : ISplunkAlertClient
         ArgumentNullException.ThrowIfNull(request);
         SplunkSavedSearchClient.ValidateCronSchedule(request.CronSchedule, nameof(request.CronSchedule));
 
-        var additional = new Dictionary<string, string>(request.AdditionalParameters, StringComparer.OrdinalIgnoreCase);
+        var additional = request.AdditionalParameters is null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(request.AdditionalParameters, StringComparer.OrdinalIgnoreCase);
         ValidateAlertSettings(request.Alert, additional);
         foreach (var parameter in SplunkSavedSearchClient.BuildAlertParameters(request.Alert))
         {

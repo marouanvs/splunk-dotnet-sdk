@@ -60,6 +60,11 @@ public sealed record SplunkResultRequest
         yield return new KeyValuePair<string, string>("count", Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
         yield return new KeyValuePair<string, string>("offset", Offset.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
+        if (Fields is null)
+        {
+            yield break;
+        }
+
         foreach (var field in Fields)
         {
             SplunkSearchSyntax.ValidateFieldName(field, nameof(Fields));

@@ -134,7 +134,7 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
         request ??= new SplunkDispatchSavedSearchRequest();
 
         var endpoint = _endpointBuilder.ServicesEndpoint($"saved/searches/{Uri.EscapeDataString(name)}/dispatch", request.Namespace);
-        var body = await PostFormForStringAsync(endpoint, request.Parameters.ToArray(), cancellationToken).ConfigureAwait(false);
+        var body = await PostFormForStringAsync(endpoint, request.Parameters?.ToArray() ?? [], cancellationToken).ConfigureAwait(false);
         return new SplunkSearchJob(ParseSearchId(body));
     }
 
@@ -307,7 +307,7 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
         SplunkTimeRange? timeRange,
         SplunkSavedSearchDispatchSettings? dispatch,
         bool? disabled,
-        IReadOnlyDictionary<string, string> additionalParameters)
+        IReadOnlyDictionary<string, string>? additionalParameters)
     {
         if (description is not null)
         {
@@ -341,6 +341,11 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
         if (disabled is not null)
         {
             yield return new KeyValuePair<string, string>("disabled", ToSplunkBool(disabled.Value));
+        }
+
+        if (additionalParameters is null)
+        {
+            yield break;
         }
 
         foreach (var parameter in additionalParameters)
@@ -537,8 +542,13 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
         }
     }
 
-    private static void ValidateAdditionalParameters(IReadOnlyDictionary<string, string> additionalParameters)
+    private static void ValidateAdditionalParameters(IReadOnlyDictionary<string, string>? additionalParameters)
     {
+        if (additionalParameters is null)
+        {
+            return;
+        }
+
         foreach (var parameter in additionalParameters)
         {
             if (string.IsNullOrWhiteSpace(parameter.Key))

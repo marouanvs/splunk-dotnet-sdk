@@ -405,6 +405,48 @@ public sealed class SplunkSdkTests
     }
 
     [Fact]
+    public async Task SearchAndAnalyticsNullCollectionsAreTreatedAsEmpty()
+    {
+        var handler = new QueueHttpMessageHandler();
+        handler.Enqueue(HttpStatusCode.OK, """
+        {"preview":false,"offset":0,"result":{"error_count":"2"}}
+        """);
+        handler.Enqueue(HttpStatusCode.OK, """
+        {"preview":false,"offset":0,"result":{"error_count":"3"}}
+        """);
+        handler.Enqueue(HttpStatusCode.OK, """{"results":[]}""");
+
+        using var client = CreateClient(handler);
+
+        var count = await client.Analytics.CountErrorsAsync(new ErrorCountQuery("team")
+        {
+            FieldFilters = null!
+        });
+        var rows = await client.Search.ExportAsync(new SplunkSearchRequest("search index=\"team\" | stats count AS error_count")
+        {
+            Count = 1,
+            Parameters = null!
+        }).ToListAsync();
+        var resultRows = await client.Search.GetResultsAsync("1700000000.8", new SplunkResultRequest
+        {
+            Count = 1,
+            Fields = null!
+        });
+
+        Assert.Equal(2, count);
+        Assert.Single(rows);
+        Assert.Empty(resultRows);
+
+        Assert.Equal(
+            "search index=\"team\" \"error\" | stats count AS error_count",
+            ParseForm(handler.Requests[0].Body)["search"]);
+        Assert.Equal("1", ParseForm(handler.Requests[1].Body)["count"]);
+        Assert.Equal(
+            "https://splunk.example.com:8089/services/search/v2/jobs/1700000000.8/results?output_mode=json&count=1&offset=0",
+            handler.Requests[2].Uri.ToString());
+    }
+
+    [Fact]
     public async Task StartDropsResultOnlySearchParameters()
     {
         var handler = new QueueHttpMessageHandler();
@@ -733,6 +775,64 @@ public sealed class SplunkSdkTests
     }
 
     [Fact]
+    public async Task DiagnosticsRecordRestFailuresBeforeRequestIsSent()
+    {
+        var activities = new List<ActivitySnapshot>();
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == SplunkDiagnostics.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity => activities.Add(ActivitySnapshot.FromActivity(activity))
+        };
+        ActivitySource.AddActivityListener(activityListener);
+
+        var measurements = new List<MeasurementSnapshot>();
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == SplunkDiagnostics.MeterName)
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<double>((instrument, measurement, tags, _) =>
+            measurements.Add(MeasurementSnapshot.FromMeasurement(instrument.Name, measurement, tags)));
+        meterListener.Start();
+
+        var handler = new QueueHttpMessageHandler();
+        using var client = new SplunkClient(
+            new HttpClient(handler),
+            new SplunkClientOptions
+            {
+                ManagementUri = new Uri("https://splunk.example.com:8089"),
+                TokenProvider = new EmptySplunkTokenProvider(),
+                Retry = new SplunkRetryOptions
+                {
+                    MaxRetries = 0,
+                    BaseDelay = TimeSpan.Zero,
+                    MaxDelay = TimeSpan.Zero
+                }
+            });
+
+        var exception = await Assert.ThrowsAsync<SplunkConfigurationException>(async () =>
+            await client.Search.GetResultsAsync("1700000000.10", new SplunkResultRequest { Count = 1 }));
+
+        Assert.Contains("empty token", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+
+        var restActivity = Assert.Single(activities.Where(activity => activity.Name == "Splunk REST request").ToArray());
+        Assert.Equal(ActivityStatusCode.Error, restActivity.Status);
+        Assert.Contains(nameof(SplunkConfigurationException), restActivity.Tags["error.type"], StringComparison.Ordinal);
+        Assert.Equal("0", restActivity.Tags["splunk.retry_count"]);
+
+        var duration = Assert.Single(measurements.Where(measurement =>
+            measurement.Name == SplunkDiagnostics.RestRequestDurationMetricName).ToArray());
+        Assert.Equal("GET", duration.Tags["http.request.method"]);
+        Assert.Equal("search.jobs.results", duration.Tags["splunk.endpoint"]);
+        Assert.Equal(nameof(SplunkConfigurationException), duration.Tags["error.type"]);
+    }
+
+    [Fact]
     public Task TypedMaterializationMapsSplunkRows()
     {
         var row = CreateRow("""
@@ -756,6 +856,20 @@ public sealed class SplunkSdkTests
         Assert.Throws<SplunkMappingException>(() =>
             CreateRow("""{"error_count":"not-a-number"}""").ToObject<MetricRow>());
 
+        return Task.CompletedTask;
+    }
+
+    [Fact]
+    public Task TypedMaterializationRejectsNullForNonNullableValueTypes()
+    {
+        var exception = Assert.Throws<SplunkMappingException>(() =>
+            CreateRow("""{"error_count":null}""").ToObject<MetricRow>());
+
+        Assert.Contains("non-nullable", exception.Message, StringComparison.Ordinal);
+
+        var mapped = CreateRow("""{"average_value":null}""").ToObject<MetricRow>();
+
+        Assert.Null(mapped.Average);
         return Task.CompletedTask;
     }
 
@@ -1142,6 +1256,52 @@ public sealed class SplunkSdkTests
             }));
 
         Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task SavedSearchAndAlertNullParameterCollectionsAreTreatedAsEmpty()
+    {
+        var handler = new QueueHttpMessageHandler();
+        handler.Enqueue(HttpStatusCode.OK, SavedSearchFeed("checkout_errors", "search index=\"team\" ERROR"));
+        handler.Enqueue(HttpStatusCode.OK, SavedSearchFeed("checkout_errors", "search index=\"team\" WARN"));
+        handler.Enqueue(HttpStatusCode.OK, """{"sid":"1710000000.11"}""");
+        handler.Enqueue(HttpStatusCode.OK, SavedSearchFeed("checkout_alert", "search index=\"team\" ERROR"));
+
+        using var client = CreateClient(handler);
+
+        var created = await client.SavedSearches.CreateAsync(new CreateSavedSearchRequest("checkout_errors", "search index=\"team\" ERROR")
+        {
+            AdditionalParameters = null!
+        });
+        var updated = await client.SavedSearches.UpdateAsync("checkout_errors", new UpdateSavedSearchRequest
+        {
+            Search = "search index=\"team\" WARN",
+            AdditionalParameters = null!
+        });
+        var job = await client.SavedSearches.DispatchAsync("checkout_errors", new SplunkDispatchSavedSearchRequest
+        {
+            Parameters = null!
+        });
+        var alert = await client.Alerts.CreateAsync(new CreateSplunkAlertRequest(
+            "checkout_alert",
+            "search index=\"team\" ERROR",
+            "*/5 * * * *")
+        {
+            AdditionalParameters = null!
+        });
+
+        Assert.Equal("checkout_errors", created.Name);
+        Assert.Equal("search index=\"team\" WARN", updated.Search);
+        Assert.Equal("1710000000.11", job.Sid);
+        Assert.Equal("checkout_alert", alert.Name);
+
+        Assert.Equal("search index=\"team\" ERROR", ParseForm(handler.Requests[0].Body)["search"]);
+        Assert.Equal("search index=\"team\" WARN", ParseForm(handler.Requests[1].Body)["search"]);
+        Assert.Empty(ParseForm(handler.Requests[2].Body));
+
+        var alertForm = ParseForm(handler.Requests[3].Body);
+        Assert.Equal("1", alertForm["is_scheduled"]);
+        Assert.Equal("number of events", alertForm["alert_type"]);
     }
 
     [Fact]
@@ -1612,6 +1772,15 @@ internal sealed record RequestSnapshot(
     AuthenticationHeaderValue? Authorization,
     string UserAgent,
     string Body);
+
+internal sealed class EmptySplunkTokenProvider : ISplunkTokenProvider
+{
+    public ValueTask<string> GetTokenAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(string.Empty);
+    }
+}
 
 internal sealed class MetricRow
 {

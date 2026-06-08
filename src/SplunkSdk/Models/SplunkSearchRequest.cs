@@ -95,6 +95,11 @@ public sealed record SplunkSearchRequest
             yield return new KeyValuePair<string, string>("preview", Preview.Value ? "true" : "false");
         }
 
+        if (Parameters is null)
+        {
+            yield break;
+        }
+
         foreach (var parameter in Parameters)
         {
             if (string.Equals(parameter.Key, "search", StringComparison.OrdinalIgnoreCase) ||

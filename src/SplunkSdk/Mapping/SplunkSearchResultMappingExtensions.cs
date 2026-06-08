@@ -123,6 +123,12 @@ public static class SplunkSearchResultMappingExtensions
 
         if (text is null)
         {
+            if (underlyingType is null && targetType.IsValueType)
+            {
+                throw new SplunkMappingException(
+                    $"Could not map null Splunk field '{fieldName}' to non-nullable property '{propertyName}' ({FriendlyName(targetType)}).");
+            }
+
             return null;
         }
 
