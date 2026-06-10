@@ -1,10 +1,10 @@
-using SplunkSdk.Analytics;
-using SplunkSdk.Alerts;
-using SplunkSdk.Configuration;
-using SplunkSdk.SavedSearches;
-using SplunkSdk.Search;
+using Marouanvs.Splunk.Analytics;
+using Marouanvs.Splunk.Alerts;
+using Marouanvs.Splunk.Configuration;
+using Marouanvs.Splunk.SavedSearches;
+using Marouanvs.Splunk.Search;
 
-namespace SplunkSdk;
+namespace Marouanvs.Splunk;
 
 /// <summary>
 /// Entry point for querying Splunk Enterprise or Splunk Cloud REST endpoints.
@@ -13,7 +13,7 @@ namespace SplunkSdk;
 /// The client exposes separate surfaces for low-level searches, high-level
 /// analytics, saved searches, and saved-search alerts. Create it directly when
 /// you manage <see cref="HttpClient"/> yourself, or register it with
-/// <c>SplunkSdk.DependencyInjection</c> in hosted applications.
+/// <c>Marouanvs.Splunk.DependencyInjection</c> in hosted applications.
 /// </remarks>
 public sealed class SplunkClient : IDisposable
 {
@@ -76,20 +76,42 @@ public sealed class SplunkClient : IDisposable
     /// <param name="options">Splunk SDK options.</param>
     /// <returns>A disposable Splunk client that owns its internal HTTP client.</returns>
     /// <remarks>
+    /// <para>
     /// This convenience factory is useful for console tools and small jobs. For
     /// services, prefer dependency injection or a caller-managed
     /// <see cref="HttpClient"/> so socket lifetime, handlers, and resilience are
     /// controlled by the host.
+    /// </para>
+    /// <para>
+    /// The owned client disables automatic redirect following: Splunk management
+    /// endpoints do not legitimately redirect, and following a redirect could replay
+    /// the <c>Authorization</c> header (and form bodies) to an unexpected target.
+    /// </para>
+    /// <para>
+    /// When <see cref="SplunkClientOptions.Timeout"/> is unset, the
+    /// <see cref="HttpClient"/> default of 100 seconds applies; blocking search
+    /// submissions (<c>exec_mode=blocking</c>) on slow searches can need a larger value.
+    /// </para>
     /// </remarks>
     public static SplunkClient Create(SplunkClientOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
 
-        var httpClient = new HttpClient
+        var handler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false
+        };
+
+        var httpClient = new HttpClient(handler, disposeHandler: true)
         {
             BaseAddress = options.NormalizedManagementUri
         };
+
+        if (options.Timeout is { } timeout)
+        {
+            httpClient.Timeout = timeout;
+        }
 
         return new SplunkClient(httpClient, options, ownsHttpClient: true);
     }

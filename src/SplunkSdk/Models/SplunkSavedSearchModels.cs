@@ -1,4 +1,4 @@
-namespace SplunkSdk.Models;
+namespace Marouanvs.Splunk.Models;
 
 /// <summary>
 /// Saved search or alert configuration returned by Splunk.
@@ -246,6 +246,10 @@ public sealed record SplunkDispatchSavedSearchRequest
     /// <summary>
     /// Gets optional dispatch arguments such as saved search template args.
     /// </summary>
+    /// <remarks>
+    /// The SDK owns <c>output_mode</c> for dispatch responses; supplying it here
+    /// causes the dispatch call to throw <see cref="SplunkConfigurationException"/>.
+    /// </remarks>
     public IReadOnlyDictionary<string, string> Parameters { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
 }

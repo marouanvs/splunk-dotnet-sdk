@@ -1,10 +1,10 @@
-# SplunkSdk
+# Marouanvs.Splunk
 
 [![CI](https://github.com/marouanvs/splunk-dotnet-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/marouanvs/splunk-dotnet-sdk/actions/workflows/ci.yml)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`SplunkSdk` is an unofficial modern .NET SDK for token-authenticated Splunk REST search, analytics, saved searches, and alerts. It focuses on team-owned index analytics such as error counts, average execution times, time-bucketed metrics, saved searches, and alerts while still allowing advanced teams to run raw SPL they already own.
+`Marouanvs.Splunk` is an unofficial modern .NET SDK for token-authenticated Splunk REST search, analytics, saved searches, and alerts. It focuses on team-owned index analytics such as error counts, average execution times, time-bucketed metrics, saved searches, and alerts while still allowing advanced teams to run raw SPL they already own.
 
 This is an unofficial, work-in-progress SDK. It is not affiliated with, endorsed by, sponsored by, or supported by Splunk Inc. Splunk is a trademark or registered trademark of Splunk Inc. in the United States and other countries.
 
@@ -74,9 +74,13 @@ The SDK is organized around a small set of public clients and request models:
 - `SplunkClientOptions`: endpoint, authentication, namespace, retry, and API-version configuration. Tokens are supplied through `ISplunkTokenProvider`.
 - `ISplunkTokenProvider`: abstraction for token retrieval. Use `StaticSplunkTokenProvider` for simple examples and a custom implementation for Vault, cloud secret stores, Kubernetes secrets, or internal rotation services.
 - `ISplunkSearchClient`: low-level search API.
-  - `ExportAsync`: streams rows from Splunk export endpoints.
-  - `StartAsync`: dispatches a search job and returns the Splunk search ID.
-  - `GetResultsAsync`: reads rows from an existing search job.
+  - `ExportAsync`: streams rows from Splunk export endpoints. Unless `Preview = true` is set, the SDK requests final results only (`preview=false`).
+  - `OneshotSearchAsync`: runs a `exec_mode=oneshot` search and returns the buffered rows without creating a persistent job.
+  - `StartAsync`: dispatches a search job and returns the Splunk search ID. Use `OneshotSearchAsync` instead of `SplunkExecutionMode.Oneshot` here.
+  - `GetJobStatusAsync`: reads dispatch state, progress, and counts for an existing job.
+  - `WaitForJobCompletionAsync`: polls a job until it is done, fails, or the timeout expires.
+  - `GetResultsAsync`: reads rows from an existing search job over GET; when `PostProcessSearch` is set, the request switches to a POST form (the documented way to pass `search` to the results endpoint), which keeps the SPL out of the URL but is not auto-retried.
+  - `DeleteJobAsync`: deletes a search job and frees its resources on the search head.
 - `ISplunkAnalyticsClient`: high-level helpers for common metrics.
   - `CountErrorsAsync`: builds a safe `stats count` query.
   - `AverageAsync`: builds a safe `stats avg(field)` query.
@@ -90,16 +94,20 @@ The SDK is organized around a small set of public clients and request models:
 - `ISplunkAlertClient`: saved-search alert API.
   - `CreateAsync`: creates a scheduled saved-search alert.
   - `AcknowledgeAsync`: marks a tracked alert as acknowledged without changing the alert definition.
-  - `SuppressAsync`: suppresses an alert for a period without deleting or disabling it.
-- `SplunkApiException`: thrown for failed Splunk REST responses and streamed export `ERROR` or `FATAL` message frames.
+  - `SuppressAsync`: suppresses an alert for a `TimeSpan` without deleting or disabling it. The SDK posts the Splunk `expiration` form field as whole seconds.
+  - `UnsuppressAsync`: clears an active operational suppression (`expiration=0`).
+  - `GetSuppressionAsync`: reads the current operational suppression state as a `SplunkAlertSuppression`.
+  - `ListFiredAlertGroupsAsync` and `ListFiredAlertsAsync`: read-only listings of triggered alerts from `/services/alerts/fired_alerts`.
+- `SplunkApiException`: thrown for failed Splunk REST responses and streamed export `ERROR` or `FATAL` message frames. Its message includes the structured Splunk `messages` entries, which usually carry the missing capability or auth reason.
+- `SplunkResponseFormatException`: thrown when a 2xx Splunk response cannot be parsed (malformed JSON/XML, missing search ID, interrupted export stream). It derives from `SplunkApiException` and never echoes response payloads.
 - `SplunkDiagnostics`: exposes sanitized `ActivitySource` and `Meter` instrumentation for OpenTelemetry or custom listeners.
 
 ## Quick Start
 
 ```csharp
-using SplunkSdk;
-using SplunkSdk.Configuration;
-using SplunkSdk.Models;
+using Marouanvs.Splunk;
+using Marouanvs.Splunk.Configuration;
+using Marouanvs.Splunk.Models;
 
 using var client = SplunkClient.Create(
     SplunkClientOptions.FromToken(
@@ -198,7 +206,7 @@ var rows = await client.Search.GetResultsAsync(job.Sid, new SplunkResultRequest
 Use `SplunkFieldAttribute` when Splunk field names do not match DTO property names exactly:
 
 ```csharp
-using SplunkSdk.Mapping;
+using Marouanvs.Splunk.Mapping;
 
 public sealed class ErrorCountRow
 {
@@ -284,6 +292,18 @@ Creating an alert creates a Splunk saved-search alert. The SDK does not decide w
 
 Saved search and alert writes modify Splunk knowledge objects. Use app namespaces and least-privilege roles in production.
 
+Operational suppression is separate from the configured `alert.suppress.period` on the alert definition. To silence an alert temporarily and inspect or clear that state:
+
+```csharp
+await client.Alerts.SuppressAsync("checkout_error_alert", TimeSpan.FromMinutes(30));
+var suppression = await client.Alerts.GetSuppressionAsync("checkout_error_alert");
+await client.Alerts.UnsuppressAsync("checkout_error_alert");
+```
+
+`SuppressAsync` posts the Splunk `expiration` field in whole seconds. Read triggered alerts without mutating anything through `ListFiredAlertGroupsAsync()` and `ListFiredAlertsAsync("checkout_error_alert")`.
+
+Saved-search dispatch always requests `output_mode=json`; supplying `output_mode` (or an empty key) in `SplunkDispatchSavedSearchRequest.Parameters` throws `SplunkConfigurationException`.
+
 ## Authentication
 
 Splunk tokens are credentials. The SDK never logs tokens and sends them per request through `Authorization: Bearer <token>` by default. Some app-specific endpoints can use `Authorization: Splunk <token>`.
@@ -295,18 +315,25 @@ var options = new SplunkClientOptions
 {
     ManagementUri = new Uri("https://splunk.company.example:8089"),
     TokenProvider = new MySecretStoreTokenProvider(),
-    AuthorizationScheme = SplunkSdk.Authentication.SplunkAuthorizationScheme.Bearer
+    AuthorizationScheme = Marouanvs.Splunk.Authentication.SplunkAuthorizationScheme.Bearer
 };
 ```
 
 Implement `ISplunkTokenProvider` when tokens come from Vault, Azure Key Vault, AWS Secrets Manager, Kubernetes secrets, or an internal rotation service.
 
+Additional configuration safety on `SplunkClientOptions`:
+
+- Plain `http://` management URIs are rejected at client creation because they would send the token unencrypted. Set `AllowInsecureHttp = true` only for disposable local labs.
+- `Timeout` (optional) applies to the `HttpClient` owned by `SplunkClient.Create`; the .NET default of 100 seconds applies when unset. Size it generously for blocking searches. It is ignored for caller-owned `HttpClient` instances.
+- The `HttpClient` created by `SplunkClient.Create` never follows HTTP redirects, so the `Authorization` header and form bodies cannot be replayed to an unexpected target. 3xx responses surface as errors.
+- `UserAgent` must be a valid HTTP `User-Agent` header value; invalid values fail at client creation rather than at send time.
+
 ## Dependency Injection
 
-The `Marouanvs.SplunkSdk.DependencyInjection` package registers `SplunkClient` with `IHttpClientFactory` and exposes the search, analytics, saved search, and alert interfaces. The C# namespace remains `SplunkSdk.DependencyInjection`:
+The `Marouanvs.Splunk.DependencyInjection` package registers `SplunkClient` with `IHttpClientFactory` and exposes the search, analytics, saved search, and alert interfaces. The C# namespace matches the package id, `Marouanvs.Splunk.DependencyInjection`:
 
 ```csharp
-using SplunkSdk.DependencyInjection;
+using Marouanvs.Splunk.DependencyInjection;
 
 builder.Services.AddSplunkClient(builder.Configuration);
 ```
@@ -321,13 +348,27 @@ builder.Services.AddSplunkClient(
 Use the direct options overload when the host builds options itself:
 
 ```csharp
-using SplunkSdk.DependencyInjection;
+using Marouanvs.Splunk.DependencyInjection;
 
 services.AddSplunkClient(new SplunkClientOptions
 {
     ManagementUri = new Uri("https://splunk.company.example:8089"),
     TokenProvider = new StaticSplunkTokenProvider(token)
 });
+```
+
+Registration and lifetime behavior:
+
+- Registering the same logical client name twice (including the default name) throws `InvalidOperationException` at registration time instead of silently overriding earlier options.
+- Tokens supplied through `Splunk:Token` or `Splunk:TokenEnvironmentVariable` are snapshotted once at startup. Use the factory overload with a custom `ISplunkTokenProvider` when tokens rotate.
+- Named registrations exist for hosts that talk to multiple Splunk deployments. They are resolvable only as keyed services and use the dedicated HTTP client name `Marouanvs.Splunk:{name}`:
+
+```csharp
+services.AddSplunkClient("ops", opsOptions);
+services.AddSplunkClient("security", builder.Configuration.GetSection("SplunkSecurity"));
+
+var opsSearch = provider.GetRequiredKeyedService<ISplunkSearchClient>("ops");
+// or [FromKeyedServices("security")] ISplunkAlertClient alerts
 ```
 
 The returned `IHttpClientBuilder` can be used to add handlers, proxies, or resilience policies owned by the host application. If the host owns retries through Polly, Microsoft.Extensions.Http.Resilience, a service mesh, or another platform policy, disable SDK retries so there is only one retry owner:
@@ -358,8 +399,12 @@ For Splunk Cloud, REST API access might need to be enabled for the deployment, a
 
 The SDK gives two paths:
 
-- Safe generated SPL through `SplunkQueryBuilder` and analytics helpers. Index names must be single literal index names, field identifiers must be safe unquoted SPL identifiers, field values are quoted, and time ranges are sent as REST parameters.
+- Safe generated SPL through `SplunkQueryBuilder` and analytics helpers. Index names must be single literal index names, field identifiers must be safe unquoted SPL identifiers (reserved scoping tokens such as `earliest`, `latest`, `index`, `splunk_server`, and uppercase boolean operators are rejected), field values are quoted, and time ranges are sent as REST parameters.
 - Raw SPL through `SplunkSearchRequest` and `RawPredicate`. Use this only for trusted searches owned by your application or Splunk team.
+
+`SplunkQueryBuilder.FieldEquals` matches literal values only and rejects `*` and `?`; use `FieldMatchesWildcard` when a wildcard match is intentional.
+
+`SplunkSearchRequest.Parameters` is for extra REST form parameters, not for keys the SDK owns. Supplying `search`, `output_mode`, `exec_mode`, or a key already covered by a typed property (`earliest_time`/`latest_time` with `TimeRange`, `count` with `Count`, `preview` when the SDK sets it) throws `SplunkConfigurationException`.
 
 Recommended query practices:
 
@@ -412,31 +457,35 @@ var options = new SplunkClientOptions
 };
 ```
 
-Keep one component responsible for retries. The core SDK intentionally does not depend on Polly; host applications can attach Polly or Microsoft.Extensions.Http.Resilience handlers through `SplunkSdk.DependencyInjection` and set `Retry.MaxRetries = 0` to avoid stacked retry amplification.
+Keep one component responsible for retries. The core SDK intentionally does not depend on Polly; host applications can attach Polly or Microsoft.Extensions.Http.Resilience handlers through `Marouanvs.Splunk.DependencyInjection` and set `Retry.MaxRetries = 0` to avoid stacked retry amplification.
 
-When `MaxRetries` is greater than zero, both `BaseDelay` and `MaxDelay` must be positive.
+Retry timing behavior:
+
+- Exponential backoff applies full jitter: each delay is uniformly random between zero and `min(BaseDelay * 2^attempt, MaxDelay)`, which prevents synchronized retry storms across clients.
+- A server `Retry-After` header is honored exactly, even above `MaxDelay`, up to `Retry.MaxServerDelay` (default 30 seconds). When Splunk asks for a wait longer than `MaxServerDelay`, the SDK does not retry and surfaces the error response immediately.
+- When `MaxRetries` is greater than zero, both `BaseDelay` and `MaxDelay` must be positive. `MaxDelay` must always be greater than or equal to `BaseDelay`, and `MaxServerDelay` must be zero or greater.
 
 ## Observability
 
 The production SDK does not take a logging dependency and does not emit raw SPL, tokens, full URLs, or private hostnames. It exposes sanitized instrumentation through:
 
-- `ActivitySource` name: `SplunkSdk`
-- `Meter` name: `SplunkSdk`
+- `ActivitySource` name: `Marouanvs.Splunk`
+- `Meter` name: `Marouanvs.Splunk`
 
 Activities:
 
-- `Splunk REST request`: request method, sanitized Splunk endpoint kind, search API version, status code, retry count.
-- `Splunk search export`: operation name, completion flag, row count.
-- `Splunk search start`: operation name, execution mode, completion flag.
-- `Splunk search results`: operation name, completion flag, row count.
+- `Splunk REST request`: request method, sanitized Splunk endpoint kind, search API version, status code, retry count. Non-2xx final responses mark this span (and only this span) with error status and a stable `error.type`; the SDK never marks ambient application activities as errored.
+- `Splunk search export`, `Splunk search oneshot`, `Splunk search start`, `Splunk search results`: operation name, completion flag, and row count where applicable.
+- `Splunk search job status`, `Splunk search job wait` (includes a `splunk.poll_count` tag), `Splunk search job delete`: job lifecycle operations.
+- `Splunk saved search list/get/create/update/delete/dispatch` and `Splunk alert create/acknowledge/suppress/unsuppress`, `Splunk alert suppression get`, `Splunk fired alert groups list`, `Splunk fired alerts list`: knowledge-object operations with `splunk.operation` and `splunk.completed` tags.
 
 Metrics:
 
-- `splunksdk.rest.client.request.duration`: REST request duration in milliseconds until response headers are received.
-- `splunksdk.rest.client.retries`: retry attempts by endpoint and reason.
-- `splunksdk.rest.client.errors`: unsuccessful Splunk REST responses surfaced by the SDK.
-- `splunksdk.search.operation.duration`: search operation duration in milliseconds.
-- `splunksdk.search.rows`: result rows read by operation.
+- `marouanvs.splunk.rest.client.request.duration`: total elapsed time of Splunk REST requests across all retry attempts, including backoff delays, in milliseconds.
+- `marouanvs.splunk.rest.client.retries`: retry attempts by endpoint and reason.
+- `marouanvs.splunk.rest.client.errors`: unsuccessful Splunk REST responses surfaced by the SDK, with Splunk message count/type attributes.
+- `marouanvs.splunk.search.operation.duration`: search operation duration in milliseconds, dimensioned by operation and completion only.
+- `marouanvs.splunk.search.rows`: histogram of result rows read per search operation (zero row counts are recorded).
 
 Consumers can subscribe with OpenTelemetry, `ActivityListener`, or `MeterListener` from the host application. Keep high-cardinality or sensitive values such as raw SPL, Splunk hostnames, search IDs, and index contents out of telemetry attributes.
 
@@ -476,7 +525,7 @@ services
 
 Do not use `HttpClientHandler.DangerousAcceptAnyServerCertificateValidator` against Splunk Cloud or production Splunk Enterprise. If custom validation is unavoidable, validate the certificate chain and hostname or pin a known certificate/public key with a documented rotation plan.
 
-When using `AddSplunkClient(builder.Configuration)`, setting `Splunk:AllowUntrustedCertificates` to `true` applies the same bypass for local labs only.
+When using `AddSplunkClient(builder.Configuration)`, setting `Splunk:AllowUntrustedCertificates` to `true` applies the same bypass for local labs only. The bypass is honored only when the management URI is a loopback host (`localhost`, `127.0.0.1`, `::1`); enabling it for any other host fails options validation at startup.
 
 ## Build And Test
 
@@ -497,8 +546,8 @@ Package metadata is centralized in `Directory.Build.props` and `Directory.Build.
 
 Published package IDs:
 
-- `Marouanvs.SplunkSdk`
-- `Marouanvs.SplunkSdk.DependencyInjection`
+- `Marouanvs.Splunk`
+- `Marouanvs.Splunk.DependencyInjection`
 
 Packable projects produce:
 
@@ -510,7 +559,7 @@ Packable projects produce:
 
 Release state is tracked in `CHANGELOG.md`. Release procedure and versioning policy live in `RELEASE.md`.
 
-Before publishing to NuGet.org, confirm repository metadata points at the public repository. GitHub Actions fills repository URLs automatically when the workflow runs in GitHub.
+The `release.yml` workflow is the canonical pack-and-publish path: GitHub Actions fills repository and project URLs automatically when the workflow runs in GitHub. Local `dotnet pack` output is for inspection only and intentionally lacks that repository metadata; do not push locally built packages to NuGet.org.
 
 Full `appsettings.json` example for application projects:
 
@@ -529,9 +578,12 @@ Full `appsettings.json` example for application projects:
     "Retry": {
       "MaxRetries": 3,
       "BaseDelay": "00:00:00.250",
-      "MaxDelay": "00:00:05"
+      "MaxDelay": "00:00:05",
+      "MaxServerDelay": "00:00:30"
     },
     "UserAgent": "MyService/1.0",
+    "Timeout": "00:02:00",
+    "AllowInsecureHttp": false,
     "AllowUntrustedCertificates": false
   }
 }
@@ -546,9 +598,12 @@ Parameter notes:
 - `SearchApiVersion`: `V2` by default. Use `V1` only for older Splunk deployments that do not support semantic v2 search endpoints.
 - `DefaultNamespace.Owner` and `DefaultNamespace.App`: optional `/servicesNS/{owner}/{app}` namespace for knowledge objects and searches.
 - `Retry.MaxRetries`: SDK-owned retries for idempotent `GET` and `DELETE` calls. Set to `0` when host-level resilience owns retries.
-- `Retry.BaseDelay` and `Retry.MaxDelay`: retry backoff bounds used when `MaxRetries` is greater than `0`.
+- `Retry.BaseDelay` and `Retry.MaxDelay`: jittered retry backoff bounds used when `MaxRetries` is greater than `0`. `MaxDelay` must be greater than or equal to `BaseDelay`.
+- `Retry.MaxServerDelay`: largest server-requested `Retry-After` wait the SDK honors before failing fast instead of retrying. Defaults to 30 seconds.
 - `UserAgent`: optional request user-agent override. If omitted, the SDK derives one from the package assembly version.
-- `AllowUntrustedCertificates`: host-application setting only. It is not part of `SplunkClientOptions`; the DI configuration overload uses it to configure a certificate bypass for disposable local labs.
+- `Timeout`: optional per-request timeout applied to the registered `HttpClient`. The .NET default of 100 seconds applies when unset.
+- `AllowInsecureHttp`: lab-only opt-in for plain `http://` management URIs, which would send the token unencrypted. Leave `false` in production.
+- `AllowUntrustedCertificates`: host-application setting only. It is not part of `SplunkClientOptions`; the DI configuration overload uses it to configure a certificate bypass for disposable local labs, and only loopback management URIs are accepted.
 
 Keep real tokens in a secret store, user secrets, or environment variable such as `SPLUNK_TOKEN`, not in a committed `appsettings.json`.
 
@@ -580,7 +635,8 @@ export SPLUNKSDK_INTEGRATION_SPL='| makeresults | eval sdk_raw_spl=1 | fields sd
 
 GitHub Actions workflows live under `.github/workflows`:
 
-- `ci.yml`: runs on push, pull request, and manual dispatch. It restores, verifies formatting, builds, runs the xUnit unit tests, verifies the live integration tests skip safely without secrets, validates the skill, and runs a BenchmarkDotNet dry smoke check.
+- `ci.yml`: runs on pull requests, pushes to `main`, and manual dispatch. It restores with the committed NuGet lock files (`--locked-mode`), verifies formatting, builds the Release configuration, runs the xUnit unit tests, verifies the live integration tests skip safely without secrets, packs both NuGet packages and uploads the `.nupkg`/`.snupkg` files as workflow artifacts, validates the skill, and runs a BenchmarkDotNet dry smoke check.
+- `release.yml`: tag-driven (`v*.*.*`) and manual-dispatch release pipeline. It runs in the `release` GitHub environment for approval gating, derives the package-validation API baseline from the previous release tag automatically, and verifies the release commit is reachable from `main` before publishing to NuGet.org. See `RELEASE.md` for the full process.
 - `splunk-integration.yml`: manual live Splunk integration workflow. It expects repository or environment secrets:
   - `SPLUNKSDK_INTEGRATION_URI`
   - `SPLUNKSDK_INTEGRATION_TOKEN`
@@ -596,6 +652,8 @@ Optional workflow secret:
 - `SPLUNKSDK_INTEGRATION_SPL`
 
 The live workflow has explicit inputs for mutation tests, self-signed lab certificates, and auth scheme. Store live Splunk secrets in the `splunk-integration` GitHub environment so mutation runs can be approval-gated.
+
+Workflow actions are pinned to full commit SHAs, and Dependabot keeps both GitHub Actions and NuGet dependencies updated on a weekly schedule. NuGet restores run in locked mode against committed `packages.lock.json` files; refresh them with `dotnet restore SplunkSdk.slnx` when dependencies change intentionally.
 
 ## Benchmarks
 
@@ -654,7 +712,7 @@ Implemented:
 - Saved search and saved-search alert management.
 - Dependency injection package backed by `IHttpClientFactory`.
 - XML/JSON Splunk error message parsing.
-- ActivitySource and Meter instrumentation named `SplunkSdk`.
+- ActivitySource and Meter instrumentation named `Marouanvs.Splunk`.
 - BenchmarkDotNet microbenchmarks for local parser and query-builder paths.
 - Opt-in live Splunk integration harness.
 
@@ -663,6 +721,10 @@ Not implemented yet:
 - HEC ingestion.
 - Pagination helper abstractions above `SplunkResultRequest`.
 - Dashboard management.
+
+## Trademarks
+
+This project is an unofficial, community-maintained SDK. It is not affiliated with, endorsed by, sponsored by, or supported by Splunk Inc. Splunk is a registered trademark of Splunk Inc. in the United States and other countries; the name is used here only to describe interoperability with Splunk products.
 
 ## License
 

@@ -12,9 +12,11 @@
   <PropertyGroup>
     <IsPackable>true</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageId>Marouanvs.SplunkSdk.DependencyInjection</PackageId>
+    <PackageId>Marouanvs.Splunk.DependencyInjection</PackageId>
+    <RootNamespace>Marouanvs.Splunk.DependencyInjection</RootNamespace>
+    <AssemblyName>Marouanvs.Splunk.DependencyInjection</AssemblyName>
     <Title>Splunk SDK Dependency Injection</Title>
-    <Description>Microsoft.Extensions.DependencyInjection integration for SplunkSdk.</Description>
+    <Description>Microsoft.Extensions.DependencyInjection integration for Marouanvs.Splunk.</Description>
     <PackageTags>splunk;splunk-cloud;splunk-enterprise;sdk;search;observability;dependency-injection</PackageTags>
   </PropertyGroup>
 

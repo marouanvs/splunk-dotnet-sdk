@@ -6,12 +6,16 @@
     <Nullable>enable</Nullable>
     <AnalysisLevel>latest</AnalysisLevel>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Deterministic>true</Deterministic>
     <IsPackable>false</IsPackable>
     <VersionPrefix>0.1.0</VersionPrefix>
-    <Authors>SplunkSdk Contributors</Authors>
-    <Company>SplunkSdk Contributors</Company>
-    <Product>SplunkSdk</Product>
+    <Authors>Marouanvs.Splunk Contributors</Authors>
+    <Company>Marouanvs.Splunk Contributors</Company>
+    <Product>Marouanvs.Splunk</Product>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>splunk;splunk-cloud;splunk-enterprise;sdk;search;observability</PackageTags>

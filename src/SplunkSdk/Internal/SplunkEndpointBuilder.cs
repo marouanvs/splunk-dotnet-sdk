@@ -1,7 +1,8 @@
-using SplunkSdk.Configuration;
-using SplunkSdk.Models;
+using System.Diagnostics;
+using Marouanvs.Splunk.Configuration;
+using Marouanvs.Splunk.Models;
 
-namespace SplunkSdk;
+namespace Marouanvs.Splunk;
 
 internal sealed class SplunkEndpointBuilder
 {
@@ -23,7 +24,7 @@ internal sealed class SplunkEndpointBuilder
         {
             SplunkSearchApiVersion.V1 => $"search/{relativeSearchPath}",
             SplunkSearchApiVersion.V2 => $"search/v2/{relativeSearchPath}",
-            _ => throw new ArgumentOutOfRangeException(nameof(_searchApiVersion))
+            _ => throw new UnreachableException("Unhandled Splunk search API version.")
         };
 
         return new Uri(_managementUri, $"{prefix}/{versionedSearchPath}");

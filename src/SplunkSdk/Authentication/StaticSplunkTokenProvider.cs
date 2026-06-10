@@ -1,4 +1,4 @@
-namespace SplunkSdk.Authentication;
+namespace Marouanvs.Splunk.Authentication;
 
 /// <summary>
 /// Token provider for deployments where the caller already has a static Splunk token.

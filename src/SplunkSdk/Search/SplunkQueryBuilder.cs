@@ -1,6 +1,6 @@
-using SplunkSdk.Models;
+using Marouanvs.Splunk.Models;
 
-namespace SplunkSdk.Search;
+namespace Marouanvs.Splunk.Search;
 
 /// <summary>
 /// Fluent builder for common generated SPL searches.
@@ -13,6 +13,8 @@ namespace SplunkSdk.Search;
 /// </remarks>
 public sealed class SplunkQueryBuilder
 {
+    private static readonly char[] WildcardCharacters = ['*', '?'];
+
     private readonly List<string> _predicates = [];
     private readonly List<string> _commands = [];
 
@@ -29,10 +31,18 @@ public sealed class SplunkQueryBuilder
     public static SplunkQueryBuilder FromIndex(string index) => new(index);
 
     /// <summary>
-    /// Adds a literal text predicate.
+    /// Adds a quoted free-text predicate.
     /// </summary>
-    /// <param name="text">Text to search as a quoted SPL literal.</param>
+    /// <param name="text">Text to search as a quoted SPL term.</param>
     /// <returns>The same builder for chaining.</returns>
+    /// <remarks>
+    /// The text is quoted with embedded quotes and backslashes escaped, but the
+    /// SPL <c>search</c> command still applies wildcard semantics inside quoted
+    /// terms: <c>*</c> matches any characters and <c>?</c> matches one
+    /// character, and neither can be escaped in this context. Free-text search
+    /// legitimately uses wildcards, so they are intentionally not rejected
+    /// here. Use <see cref="FieldEquals"/> for literal field comparisons.
+    /// </remarks>
     public SplunkQueryBuilder SearchText(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -45,14 +55,53 @@ public sealed class SplunkQueryBuilder
     }
 
     /// <summary>
-    /// Adds a safe field equality predicate.
+    /// Adds a literal field equality predicate.
     /// </summary>
     /// <param name="field">Safe unquoted Splunk field name.</param>
-    /// <param name="value">Value to compare using quoted SPL literal syntax.</param>
+    /// <param name="value">Literal value to compare using quoted SPL syntax.</param>
     /// <returns>The same builder for chaining.</returns>
+    /// <remarks>
+    /// Values containing the SPL wildcard characters <c>*</c> or <c>?</c> are
+    /// rejected because wildcards inside quoted values still match in the SPL
+    /// <c>search</c> command and cannot be escaped, which would break the
+    /// literal-equality contract of this method. Use
+    /// <see cref="FieldMatchesWildcard"/> for intentional wildcard matching.
+    /// </remarks>
     public SplunkQueryBuilder FieldEquals(string field, string value)
     {
+        ArgumentNullException.ThrowIfNull(value);
+
+        if (value.IndexOfAny(WildcardCharacters) >= 0)
+        {
+            throw new ArgumentException(
+                "Field equality values are literal and must not contain the SPL wildcard characters '*' or '?'. Use FieldMatchesWildcard for intentional wildcard matching.",
+                nameof(value));
+        }
+
         _predicates.Add($"{SplunkSearchSyntax.ValidateFieldName(field, nameof(field))}={SplunkSearchSyntax.QuoteValue(value)}");
+        return this;
+    }
+
+    /// <summary>
+    /// Adds a field predicate that intentionally uses SPL wildcard matching.
+    /// </summary>
+    /// <param name="field">Safe unquoted Splunk field name.</param>
+    /// <param name="pattern">Quoted SPL pattern where <c>*</c> matches any characters and <c>?</c> matches one character.</param>
+    /// <returns>The same builder for chaining.</returns>
+    /// <remarks>
+    /// The pattern is quoted with embedded quotes and backslashes escaped, but
+    /// wildcard characters keep their SPL matching semantics. Only use this
+    /// method when wildcard matching is intended; use <see cref="FieldEquals"/>
+    /// for literal comparisons of user-provided values.
+    /// </remarks>
+    public SplunkQueryBuilder FieldMatchesWildcard(string field, string pattern)
+    {
+        if (string.IsNullOrWhiteSpace(pattern))
+        {
+            throw new ArgumentException("A wildcard pattern must not be empty.", nameof(pattern));
+        }
+
+        _predicates.Add($"{SplunkSearchSyntax.ValidateFieldName(field, nameof(field))}={SplunkSearchSyntax.QuoteValue(pattern)}");
         return this;
     }
 

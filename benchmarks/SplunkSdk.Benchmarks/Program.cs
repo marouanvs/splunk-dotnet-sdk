@@ -2,11 +2,11 @@ using System.Net;
 using System.Text;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
-using SplunkSdk;
-using SplunkSdk.Authentication;
-using SplunkSdk.Configuration;
-using SplunkSdk.Models;
-using SplunkSdk.Search;
+using Marouanvs.Splunk;
+using Marouanvs.Splunk.Authentication;
+using Marouanvs.Splunk.Configuration;
+using Marouanvs.Splunk.Models;
+using Marouanvs.Splunk.Search;
 
 BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 
@@ -105,12 +105,13 @@ public class SearchExportBenchmarks
         {
             builder.Append("{\"preview\":false,\"offset\":");
             builder.Append(index);
+            builder.Append(",\"lastrow\":");
+            builder.Append(index == rows - 1 ? "true" : "false");
             builder.Append(",\"result\":{\"event_count\":\"");
             builder.Append(index + 1);
             builder.AppendLine("\",\"service\":\"checkout\"}}");
         }
 
-        builder.AppendLine("""{"lastrow":true}""");
         return builder.ToString();
     }
 }

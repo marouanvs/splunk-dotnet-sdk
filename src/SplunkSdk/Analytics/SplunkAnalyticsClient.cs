@@ -1,8 +1,8 @@
 using System.Globalization;
-using SplunkSdk.Models;
-using SplunkSdk.Search;
+using Marouanvs.Splunk.Models;
+using Marouanvs.Splunk.Search;
 
-namespace SplunkSdk.Analytics;
+namespace Marouanvs.Splunk.Analytics;
 
 /// <summary>
 /// Default high-level analytics implementation.
@@ -27,8 +27,8 @@ public sealed class SplunkAnalyticsClient : ISplunkAnalyticsClient
         var builder = BuildBaseQuery(query.Index, query.Text, query.FieldFilters, query.RawPredicate)
             .StatsCount(ErrorCountAlias);
 
-        var row = await FirstOrDefaultAsync(
-            new SplunkSearchRequest(builder.Build()) { TimeRange = query.TimeRange, Count = 1 },
+        var row = await FirstFinalOrDefaultAsync(
+            new SplunkSearchRequest(builder.Build()) { TimeRange = query.TimeRange, Count = 1, Preview = false },
             cancellationToken)
             .ConfigureAwait(false);
 
@@ -44,8 +44,8 @@ public sealed class SplunkAnalyticsClient : ISplunkAnalyticsClient
         var builder = BuildBaseQuery(query.Index, query.Text, query.FieldFilters, query.RawPredicate)
             .StatsAverage(query.Field, AverageAlias);
 
-        var row = await FirstOrDefaultAsync(
-            new SplunkSearchRequest(builder.Build()) { TimeRange = query.TimeRange, Count = 1 },
+        var row = await FirstFinalOrDefaultAsync(
+            new SplunkSearchRequest(builder.Build()) { TimeRange = query.TimeRange, Count = 1, Preview = false },
             cancellationToken)
             .ConfigureAwait(false);
 
@@ -61,27 +61,41 @@ public sealed class SplunkAnalyticsClient : ISplunkAnalyticsClient
         SplunkSearchSyntax.ValidateFieldName(query.Field, nameof(query.Field));
         SplunkSearchSyntax.ValidateSpan(query.Span, nameof(query.Span));
 
-        var builder = BuildBaseQuery(query.Index, query.Text, query.FieldFilters, rawPredicate: null)
+        var builder = BuildBaseQuery(query.Index, query.Text, query.FieldFilters, query.RawPredicate)
             .TimechartAverage(query.Span, query.Field, AverageAlias);
 
-        var request = new SplunkSearchRequest(builder.Build()) { TimeRange = query.TimeRange, Count = 0 };
+        var request = new SplunkSearchRequest(builder.Build()) { TimeRange = query.TimeRange, Count = 0, Preview = false };
         var buckets = new List<MetricTimeBucket>();
 
         await foreach (var row in _searchClient.ExportAsync(request, cancellationToken).ConfigureAwait(false))
         {
+            // Preview frames carry partial aggregates and would duplicate final
+            // buckets. The request already disables previews; this is defensive.
+            if (row.Preview)
+            {
+                continue;
+            }
+
             buckets.Add(new MetricTimeBucket(ParseSplunkTime(row.GetString("_time")), row.GetDouble(AverageAlias)));
         }
 
         return buckets;
     }
 
-    private async Task<SplunkSearchResult?> FirstOrDefaultAsync(
+    private async Task<SplunkSearchResult?> FirstFinalOrDefaultAsync(
         SplunkSearchRequest request,
         CancellationToken cancellationToken)
     {
         SplunkSearchResult? first = null;
         await foreach (var row in _searchClient.ExportAsync(request, cancellationToken).ConfigureAwait(false))
         {
+            // Preview rows hold partial in-progress aggregates. The request
+            // already disables previews; skipping them here is defensive.
+            if (row.Preview)
+            {
+                continue;
+            }
+
             first ??= row;
         }
 

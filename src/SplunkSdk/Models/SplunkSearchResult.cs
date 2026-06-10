@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 
-namespace SplunkSdk.Models;
+namespace Marouanvs.Splunk.Models;
 
 /// <summary>
 /// Represents one row returned by a Splunk search result stream.

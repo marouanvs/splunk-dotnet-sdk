@@ -3,10 +3,10 @@ using System.Net;
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
-using SplunkSdk.Diagnostics;
-using SplunkSdk.Models;
+using Marouanvs.Splunk.Diagnostics;
+using Marouanvs.Splunk.Models;
 
-namespace SplunkSdk.SavedSearches;
+namespace Marouanvs.Splunk.SavedSearches;
 
 /// <summary>
 /// Default saved search client.
@@ -30,6 +30,11 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
         "disabled"
     };
 
+    private static readonly HashSet<string> ReservedDispatchParameterNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "output_mode"
+    };
+
     private readonly SplunkRestClient _restClient;
     private readonly SplunkEndpointBuilder _endpointBuilder;
 
@@ -45,11 +50,29 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
         CancellationToken cancellationToken = default)
     {
         request ??= new SplunkSavedSearchListRequest();
-        var endpoint = _endpointBuilder.ServicesEndpoint("saved/searches", request.Namespace);
-        endpoint = _endpointBuilder.AppendQuery(endpoint, request.ToQueryParameters());
 
-        var body = await GetStringAsync(endpoint, cancellationToken).ConfigureAwait(false);
-        return SplunkAtomFeedParser.ParseSavedSearches(body);
+        using var activity = StartOperationActivity("Splunk saved search list", "saved_search.list");
+        var completed = false;
+
+        try
+        {
+            var endpoint = _endpointBuilder.ServicesEndpoint("saved/searches", request.Namespace);
+            endpoint = _endpointBuilder.AppendQuery(endpoint, request.ToQueryParameters());
+
+            var body = await GetStringAsync(endpoint, cancellationToken).ConfigureAwait(false);
+            var searches = SplunkAtomFeedParser.ParseSavedSearches(body);
+            completed = true;
+            return searches;
+        }
+        catch (Exception ex)
+        {
+            SplunkDiagnostics.SetException(activity, ex);
+            throw;
+        }
+        finally
+        {
+            activity?.SetTag("splunk.completed", completed);
+        }
     }
 
     /// <inheritdoc />
@@ -59,22 +82,37 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
         CancellationToken cancellationToken = default)
     {
         ValidateName(name);
-        var endpoint = SavedSearchEndpoint(name, splunkNamespace);
-        endpoint = _endpointBuilder.AppendQuery(endpoint, [new KeyValuePair<string, string>("output_mode", "json")]);
 
-        const string operation = "saved_search.get";
-        using var activity = SplunkDiagnostics.ActivitySource.StartActivity("Splunk saved search GET", ActivityKind.Client);
-        activity?.SetTag("splunk.operation", operation);
+        using var activity = StartOperationActivity("Splunk saved search get", "saved_search.get");
+        var completed = false;
 
-        using var response = await _restClient.GetAsync(endpoint, cancellationToken).ConfigureAwait(false);
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        try
         {
-            return null;
-        }
+            var endpoint = SavedSearchEndpoint(name, splunkNamespace);
+            endpoint = _endpointBuilder.AppendQuery(endpoint, [new KeyValuePair<string, string>("output_mode", "json")]);
 
-        await _restClient.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return SplunkAtomFeedParser.ParseSavedSearches(body).FirstOrDefault();
+            using var response = await _restClient.GetAsync(endpoint, cancellationToken).ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                completed = true;
+                return null;
+            }
+
+            await _restClient.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var savedSearch = SplunkAtomFeedParser.ParseSavedSearches(body).FirstOrDefault();
+            completed = true;
+            return savedSearch;
+        }
+        catch (Exception ex)
+        {
+            SplunkDiagnostics.SetException(activity, ex);
+            throw;
+        }
+        finally
+        {
+            activity?.SetTag("splunk.completed", completed);
+        }
     }
 
     /// <inheritdoc />
@@ -90,10 +128,27 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
             ValidateCronSchedule(request.CronSchedule, nameof(request.CronSchedule));
         }
 
-        var endpoint = _endpointBuilder.ServicesEndpoint("saved/searches", request.Namespace);
-        var parameters = BuildCreateParameters(request).ToArray();
-        var body = await PostFormForStringAsync(endpoint, parameters, cancellationToken).ConfigureAwait(false);
-        return ParseSingleSavedSearch(body, request.Name);
+        using var activity = StartOperationActivity("Splunk saved search create", "saved_search.create");
+        var completed = false;
+
+        try
+        {
+            var endpoint = _endpointBuilder.ServicesEndpoint("saved/searches", request.Namespace);
+            var parameters = BuildCreateParameters(request).ToArray();
+            var body = await PostFormForStringAsync(endpoint, parameters, cancellationToken).ConfigureAwait(false);
+            var savedSearch = ParseSingleSavedSearch(body);
+            completed = true;
+            return savedSearch;
+        }
+        catch (Exception ex)
+        {
+            SplunkDiagnostics.SetException(activity, ex);
+            throw;
+        }
+        finally
+        {
+            activity?.SetTag("splunk.completed", completed);
+        }
     }
 
     /// <inheritdoc />
@@ -104,11 +159,32 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
     {
         ValidateName(name);
         ArgumentNullException.ThrowIfNull(request);
+        if (request.IsScheduled == true)
+        {
+            ValidateCronSchedule(request.CronSchedule, nameof(request.CronSchedule));
+        }
 
-        var endpoint = SavedSearchEndpoint(name, request.Namespace);
-        var parameters = BuildUpdateParameters(request).ToArray();
-        var body = await PostFormForStringAsync(endpoint, parameters, cancellationToken).ConfigureAwait(false);
-        return ParseSingleSavedSearch(body, name);
+        using var activity = StartOperationActivity("Splunk saved search update", "saved_search.update");
+        var completed = false;
+
+        try
+        {
+            var endpoint = SavedSearchEndpoint(name, request.Namespace);
+            var parameters = BuildUpdateParameters(request).ToArray();
+            var body = await PostFormForStringAsync(endpoint, parameters, cancellationToken).ConfigureAwait(false);
+            var savedSearch = ParseSingleSavedSearch(body);
+            completed = true;
+            return savedSearch;
+        }
+        catch (Exception ex)
+        {
+            SplunkDiagnostics.SetException(activity, ex);
+            throw;
+        }
+        finally
+        {
+            activity?.SetTag("splunk.completed", completed);
+        }
     }
 
     /// <inheritdoc />
@@ -118,10 +194,27 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
         CancellationToken cancellationToken = default)
     {
         ValidateName(name);
-        var endpoint = SavedSearchEndpoint(name, splunkNamespace);
 
-        using var response = await _restClient.DeleteAsync(endpoint, cancellationToken).ConfigureAwait(false);
-        await _restClient.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        using var activity = StartOperationActivity("Splunk saved search delete", "saved_search.delete");
+        var completed = false;
+
+        try
+        {
+            var endpoint = SavedSearchEndpoint(name, splunkNamespace);
+
+            using var response = await _restClient.DeleteAsync(endpoint, cancellationToken).ConfigureAwait(false);
+            await _restClient.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+            completed = true;
+        }
+        catch (Exception ex)
+        {
+            SplunkDiagnostics.SetException(activity, ex);
+            throw;
+        }
+        finally
+        {
+            activity?.SetTag("splunk.completed", completed);
+        }
     }
 
     /// <inheritdoc />
@@ -133,9 +226,27 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
         ValidateName(name);
         request ??= new SplunkDispatchSavedSearchRequest();
 
-        var endpoint = _endpointBuilder.ServicesEndpoint($"saved/searches/{Uri.EscapeDataString(name)}/dispatch", request.Namespace);
-        var body = await PostFormForStringAsync(endpoint, request.Parameters?.ToArray() ?? [], cancellationToken).ConfigureAwait(false);
-        return new SplunkSearchJob(ParseSearchId(body));
+        using var activity = StartOperationActivity("Splunk saved search dispatch", "saved_search.dispatch");
+        var completed = false;
+
+        try
+        {
+            var endpoint = _endpointBuilder.ServicesEndpoint($"saved/searches/{Uri.EscapeDataString(name)}/dispatch", request.Namespace);
+            var parameters = BuildDispatchRequestParameters(request.Parameters).ToArray();
+            var body = await PostFormForStringAsync(endpoint, parameters, cancellationToken).ConfigureAwait(false);
+            var job = new SplunkSearchJob(ParseSearchId(body));
+            completed = true;
+            return job;
+        }
+        catch (Exception ex)
+        {
+            SplunkDiagnostics.SetException(activity, ex);
+            throw;
+        }
+        finally
+        {
+            activity?.SetTag("splunk.completed", completed);
+        }
     }
 
     internal static IEnumerable<KeyValuePair<string, string>> BuildAlertParameters(SplunkAlertSettings alert)
@@ -225,14 +336,22 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
         {
             throw new ArgumentException("Saved search names must not contain path separators.", nameof(name));
         }
+
+        if (name is "." or "..")
+        {
+            throw new ArgumentException("Saved search names must not be the dot segments '.' or '..'.", nameof(name));
+        }
+    }
+
+    internal static Activity? StartOperationActivity(string activityName, string operation)
+    {
+        var activity = SplunkDiagnostics.ActivitySource.StartActivity(activityName, ActivityKind.Client);
+        activity?.SetTag("splunk.operation", operation);
+        return activity;
     }
 
     private async Task<string> GetStringAsync(Uri endpoint, CancellationToken cancellationToken)
     {
-        const string operation = "saved_search.get";
-        using var activity = SplunkDiagnostics.ActivitySource.StartActivity("Splunk saved search GET", ActivityKind.Client);
-        activity?.SetTag("splunk.operation", operation);
-
         using var response = await _restClient.GetAsync(endpoint, cancellationToken).ConfigureAwait(false);
         await _restClient.EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
@@ -251,9 +370,37 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
     private Uri SavedSearchEndpoint(string name, SplunkNamespace? splunkNamespace) =>
         _endpointBuilder.ServicesEndpoint($"saved/searches/{Uri.EscapeDataString(name)}", splunkNamespace);
 
-    private static SplunkSavedSearch ParseSingleSavedSearch(string body, string fallbackName) =>
+    private static SplunkSavedSearch ParseSingleSavedSearch(string body) =>
         SplunkAtomFeedParser.ParseSavedSearches(body).FirstOrDefault() ??
-        new SplunkSavedSearch { Name = fallbackName };
+        throw new SplunkResponseFormatException(
+            "Splunk returned a successful saved search response without a parseable saved search entry.");
+
+    private static IEnumerable<KeyValuePair<string, string>> BuildDispatchRequestParameters(
+        IReadOnlyDictionary<string, string>? parameters)
+    {
+        yield return new KeyValuePair<string, string>("output_mode", "json");
+
+        if (parameters is null)
+        {
+            yield break;
+        }
+
+        foreach (var parameter in parameters)
+        {
+            if (string.IsNullOrWhiteSpace(parameter.Key))
+            {
+                throw new SplunkConfigurationException("Saved search dispatch parameter names must not be empty.");
+            }
+
+            if (ReservedDispatchParameterNames.Contains(parameter.Key))
+            {
+                throw new SplunkConfigurationException(
+                    $"Saved search dispatch parameter '{parameter.Key}' is controlled by the SDK.");
+            }
+
+            yield return parameter;
+        }
+    }
 
     private static IEnumerable<KeyValuePair<string, string>> BuildCreateParameters(CreateSavedSearchRequest request)
     {
@@ -571,7 +718,7 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
     {
         if (string.IsNullOrWhiteSpace(body))
         {
-            throw new SplunkApiException(System.Net.HttpStatusCode.OK, "OK", string.Empty, [new SplunkMessage("ERROR", "Splunk did not return a search ID.")]);
+            throw new SplunkResponseFormatException("Splunk did not return a search ID for a saved search dispatch.");
         }
 
         var trimmed = body.TrimStart();
@@ -589,7 +736,7 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
             }
             catch (JsonException ex)
             {
-                throw CreateMalformedDispatchResponseException("JSON", ex);
+                throw new SplunkResponseFormatException("Splunk returned malformed JSON for a saved search dispatch response.", ex);
             }
         }
 
@@ -606,20 +753,10 @@ public sealed class SplunkSavedSearchClient : ISplunkSavedSearchClient
             }
             catch (XmlException ex)
             {
-                throw CreateMalformedDispatchResponseException("XML", ex);
+                throw new SplunkResponseFormatException("Splunk returned malformed XML for a saved search dispatch response.", ex);
             }
         }
 
-        throw new SplunkApiException(System.Net.HttpStatusCode.OK, "OK", string.Empty, [new SplunkMessage("ERROR", "Splunk did not return a search ID.")]);
-    }
-
-    private static SplunkApiException CreateMalformedDispatchResponseException(string format, Exception innerException)
-    {
-        _ = innerException;
-        return new SplunkApiException(
-            System.Net.HttpStatusCode.OK,
-            "OK",
-            string.Empty,
-            [new SplunkMessage("ERROR", $"Splunk returned malformed {format} for a saved search dispatch response.")]);
+        throw new SplunkResponseFormatException("Splunk did not return a search ID for a saved search dispatch.");
     }
 }

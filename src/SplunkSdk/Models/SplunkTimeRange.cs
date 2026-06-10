@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace SplunkSdk.Models;
+namespace Marouanvs.Splunk.Models;
 
 /// <summary>
 /// Represents Splunk <c>earliest_time</c> and <c>latest_time</c> request parameters.
@@ -52,6 +52,11 @@ public sealed record SplunkTimeRange
     /// <param name="earliest">Inclusive earliest instant.</param>
     /// <param name="latest">Exclusive latest instant, which must be after <paramref name="earliest"/>.</param>
     /// <returns>An absolute Splunk time range encoded as Unix epoch seconds.</returns>
+    /// <remarks>
+    /// Both bounds are emitted with millisecond precision (for example
+    /// <c>1700000000.123</c>) using the invariant culture, so fractional-second
+    /// instants are not silently truncated out of the requested range.
+    /// </remarks>
     public static SplunkTimeRange Absolute(DateTimeOffset earliest, DateTimeOffset latest)
     {
         if (latest <= earliest)
@@ -59,9 +64,7 @@ public sealed record SplunkTimeRange
             throw new ArgumentException("Latest must be after earliest.", nameof(latest));
         }
 
-        return new SplunkTimeRange(
-            earliest.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
-            latest.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
+        return new SplunkTimeRange(FormatEpochSeconds(earliest), FormatEpochSeconds(latest));
     }
 
     /// <summary>
@@ -79,6 +82,12 @@ public sealed record SplunkTimeRange
         {
             yield return new KeyValuePair<string, string>("latest_time", Latest);
         }
+    }
+
+    private static string FormatEpochSeconds(DateTimeOffset instant)
+    {
+        var epochSeconds = instant.ToUnixTimeMilliseconds() / 1000m;
+        return epochSeconds.ToString("0.###", CultureInfo.InvariantCulture);
     }
 
     private static string FormatDuration(TimeSpan duration)

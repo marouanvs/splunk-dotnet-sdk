@@ -1,4 +1,6 @@
-namespace SplunkSdk.Models;
+using Marouanvs.Splunk.Search;
+
+namespace Marouanvs.Splunk.Models;
 
 /// <summary>
 /// Describes options for fetching rows from an existing Splunk search job.
@@ -33,14 +35,29 @@ public sealed record SplunkResultRequest
     /// <summary>
     /// Gets fields to return through repeated <c>f</c> parameters.
     /// </summary>
+    /// <remarks>
+    /// Only identifier-shaped field names are accepted for projection. The
+    /// values are REST query parameters and never enter generated SPL, so
+    /// default Splunk fields such as <c>index</c> and <c>splunk_server</c>
+    /// are valid projections.
+    /// </remarks>
     public IReadOnlyList<string> Fields { get; init; } = Array.Empty<string>();
 
     /// <summary>
     /// Gets an optional post-processing search applied by Splunk to job results.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Post-process search is raw SPL executed by Splunk against existing job
     /// results. Treat it as trusted input.
+    /// </para>
+    /// <para>
+    /// The v2 results endpoint accepts the post-process <c>search</c> parameter
+    /// only on POST requests, so setting this value makes the SDK send the
+    /// results request as a POST with form parameters instead of a GET with
+    /// query parameters. The SDK does not retry that POST; requests without a
+    /// post-process search keep using GET with built-in retries.
+    /// </para>
     /// </remarks>
     public string? PostProcessSearch { get; init; }
 
@@ -60,15 +77,13 @@ public sealed record SplunkResultRequest
         yield return new KeyValuePair<string, string>("count", Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
         yield return new KeyValuePair<string, string>("offset", Offset.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-        if (Fields is null)
+        if (Fields is not null)
         {
-            yield break;
-        }
-
-        foreach (var field in Fields)
-        {
-            SplunkSearchSyntax.ValidateFieldName(field, nameof(Fields));
-            yield return new KeyValuePair<string, string>("f", field);
+            foreach (var field in Fields)
+            {
+                SplunkSearchSyntax.ValidateResultFieldName(field, nameof(Fields));
+                yield return new KeyValuePair<string, string>("f", field);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(PostProcessSearch))

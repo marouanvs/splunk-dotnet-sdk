@@ -1,4 +1,4 @@
-namespace SplunkSdk;
+namespace Marouanvs.Splunk;
 
 /// <summary>
 /// Represents invalid SDK configuration.

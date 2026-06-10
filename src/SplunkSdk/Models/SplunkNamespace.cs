@@ -1,4 +1,4 @@
-namespace SplunkSdk.Models;
+namespace Marouanvs.Splunk.Models;
 
 /// <summary>
 /// Identifies a Splunk REST namespace under <c>/servicesNS/{owner}/{app}</c>.
@@ -47,6 +47,11 @@ public sealed record SplunkNamespace
         if (value.Contains('/', StringComparison.Ordinal) || value.Contains('\\', StringComparison.Ordinal))
         {
             throw new ArgumentException("Splunk namespace segments must not contain path separators.", parameterName);
+        }
+
+        if (value is "." or "..")
+        {
+            throw new ArgumentException("Splunk namespace segments must not be the dot segments '.' or '..'.", parameterName);
         }
     }
 }

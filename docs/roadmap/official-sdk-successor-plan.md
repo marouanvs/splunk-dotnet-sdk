@@ -87,7 +87,7 @@ Tier 2, after `1.0`:
 
 Tier 3:
 
-- Modular inputs, likely as `Marouanvs.SplunkSdk.ModularInputs`.
+- Modular inputs, likely as `Marouanvs.Splunk.ModularInputs`.
 
 ## Phase 4: Saved Search And Alert Depth
 
@@ -177,8 +177,8 @@ Before using replacement-level positioning publicly, the packages need release m
 Required:
 
 - Publish NuGet packages:
-  - `Marouanvs.SplunkSdk`
-  - `Marouanvs.SplunkSdk.DependencyInjection`
+  - `Marouanvs.Splunk`
+  - `Marouanvs.Splunk.DependencyInjection`
 - SourceLink.
 - Deterministic builds.
 - Symbol packages.

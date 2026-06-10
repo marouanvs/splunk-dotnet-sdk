@@ -13,21 +13,49 @@ def fail(message: str) -> int:
     return 1
 
 
+_BLOCK_SCALAR_INDICATORS = frozenset({"|", ">", "|-", ">-", "|+", ">+"})
+
+
 def parse_frontmatter(text: str) -> dict[str, str] | None:
+    """Parse simple YAML frontmatter into a flat key/value mapping.
+
+    Supports single-line scalars plus simple multi-line values: block scalars
+    (``key: |`` / ``key: >`` with chomping indicators) and indented plain-scalar
+    continuation lines. Continuation lines are folded into the value with
+    spaces, which is sufficient for the presence/content checks below. Any
+    other top-level construct is rejected, matching the previous strictness.
+    """
     match = re.match(r"^---\n(?P<body>.*?)\n---\n", text, re.DOTALL)
     if not match:
         return None
 
     fields: dict[str, str] = {}
+    current_key: str | None = None
+
     for line in match.group("body").splitlines():
-        if not line.strip() or line.strip().startswith("#"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
 
-        if ":" not in line:
+        if line[0] in (" ", "\t"):
+            # Indented line: continuation of the current multi-line value.
+            if current_key is None:
+                return None
+
+            existing = fields[current_key]
+            fields[current_key] = f"{existing} {stripped}" if existing else stripped
+            continue
+
+        key_match = re.match(r"^(?P<key>[^\s:][^:]*):(?P<value>.*)$", line)
+        if not key_match:
             return None
 
-        key, value = line.split(":", 1)
-        fields[key.strip()] = value.strip().strip("\"'")
+        current_key = key_match.group("key").strip()
+        value = key_match.group("value").strip()
+        if value in _BLOCK_SCALAR_INDICATORS:
+            value = ""
+
+        fields[current_key] = value.strip("\"'")
 
     return fields
 

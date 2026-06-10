@@ -1,5 +1,5 @@
 ---
-applyTo: "src/SplunkSdk/**,tests/SplunkSdk.Tests/**,skills/splunk-interactions/**,README.md,AGENTS.md,CLAUDE.md,.github/copilot-instructions.md"
+applyTo: "src/**,tests/**,benchmarks/**,skills/**,.github/workflows/**,README.md,AGENTS.md,CLAUDE.md,.github/copilot-instructions.md"
 ---
 
 # Splunk SDK Path Instructions

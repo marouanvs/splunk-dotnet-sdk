@@ -1,4 +1,4 @@
-namespace SplunkSdk.Models;
+namespace Marouanvs.Splunk.Models;
 
 /// <summary>
 /// Query for counting error-like events in one Splunk index.
@@ -82,6 +82,11 @@ public sealed record MetricTimeSeriesQuery(string Index, string Field)
     /// <remarks>Keys are Splunk field names and values are quoted as literals.</remarks>
     public IReadOnlyDictionary<string, string> FieldFilters { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Gets an optional raw SPL predicate for advanced teams. Treat this as trusted input.
+    /// </summary>
+    public string? RawPredicate { get; init; }
 
     /// <summary>
     /// Gets the time range. Defaults to the last 24 hours.

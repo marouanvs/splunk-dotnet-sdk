@@ -1,4 +1,4 @@
-namespace SplunkSdk;
+namespace Marouanvs.Splunk;
 
 /// <summary>
 /// Message returned by the Splunk REST API.

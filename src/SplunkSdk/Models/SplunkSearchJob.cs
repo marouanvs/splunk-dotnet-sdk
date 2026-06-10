@@ -1,4 +1,4 @@
-namespace SplunkSdk.Models;
+namespace Marouanvs.Splunk.Models;
 
 /// <summary>
 /// Represents a dispatched Splunk search job.

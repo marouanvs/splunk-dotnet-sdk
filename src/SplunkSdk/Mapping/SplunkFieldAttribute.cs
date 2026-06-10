@@ -1,4 +1,4 @@
-namespace SplunkSdk.Mapping;
+namespace Marouanvs.Splunk.Mapping;
 
 /// <summary>
 /// Maps a Splunk result field to a DTO property.

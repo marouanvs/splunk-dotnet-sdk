@@ -1,11 +1,10 @@
 using System.Collections.Immutable;
-using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using SplunkSdk.Diagnostics;
-using SplunkSdk.Models;
+using Marouanvs.Splunk.Diagnostics;
+using Marouanvs.Splunk.Models;
 
-namespace SplunkSdk.Search;
+namespace Marouanvs.Splunk.Search;
 
 internal static class SplunkSearchResultReader
 {
@@ -38,6 +37,10 @@ internal static class SplunkSearchResultReader
                 {
                     throw CreateMalformedResultStreamException(ex);
                 }
+                catch (Exception ex) when (ex is IOException or HttpRequestException)
+                {
+                    throw CreateInterruptedResultStreamException(ex);
+                }
 
                 foreach (var result in ReadElement(root))
                 {
@@ -64,11 +67,12 @@ internal static class SplunkSearchResultReader
             if (root.TryGetProperty("results", out var results) &&
                 results.ValueKind == JsonValueKind.Array)
             {
+                var bodyPreview = ReadBooleanProperty(root, "preview");
                 foreach (var result in results.EnumerateArray())
                 {
                     if (result.ValueKind == JsonValueKind.Object)
                     {
-                        yield return new SplunkSearchResult(CloneFields(result));
+                        yield return new SplunkSearchResult(CloneFields(result), bodyPreview);
                     }
                 }
 
@@ -78,13 +82,11 @@ internal static class SplunkSearchResultReader
             if (root.TryGetProperty("result", out var wrappedResult) &&
                 wrappedResult.ValueKind == JsonValueKind.Object)
             {
-                var preview = root.TryGetProperty("preview", out var previewElement) &&
-                    previewElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
-                    previewElement.GetBoolean();
-                var lastRow = root.TryGetProperty("lastrow", out var lastRowElement) &&
-                    lastRowElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
-                    lastRowElement.GetBoolean();
-                var offset = root.TryGetProperty("offset", out var offsetElement) && offsetElement.TryGetInt64(out var parsedOffset)
+                var preview = ReadBooleanProperty(root, "preview");
+                var lastRow = ReadBooleanProperty(root, "lastrow");
+                var offset = root.TryGetProperty("offset", out var offsetElement) &&
+                    offsetElement.ValueKind == JsonValueKind.Number &&
+                    offsetElement.TryGetInt64(out var parsedOffset)
                     ? parsedOffset
                     : (long?)null;
 
@@ -97,12 +99,17 @@ internal static class SplunkSearchResultReader
         // result payloads should be exposed as data rows.
     }
 
+    private static bool ReadBooleanProperty(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var element) &&
+        element.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+        element.GetBoolean();
+
     private static void ThrowIfFatalMessages(JsonElement messages)
     {
         var parsedMessages = ReadMessages(messages);
         if (parsedMessages.Any(IsFatalMessage))
         {
-            var exception = new SplunkApiException(HttpStatusCode.OK, "OK", string.Empty, parsedMessages);
+            var exception = new SplunkApiException(System.Net.HttpStatusCode.OK, "OK", parsedMessages);
             SplunkDiagnostics.SetException(System.Diagnostics.Activity.Current, exception);
             throw exception;
         }
@@ -115,8 +122,8 @@ internal static class SplunkSearchResultReader
         {
             if (message.ValueKind == JsonValueKind.Object)
             {
-                var type = message.TryGetProperty("type", out var typeElement) ? typeElement.GetString() ?? string.Empty : string.Empty;
-                var text = message.TryGetProperty("text", out var textElement) ? textElement.GetString() ?? string.Empty : message.ToString();
+                var type = message.TryGetProperty("type", out var typeElement) ? ReadElementAsString(typeElement) : string.Empty;
+                var text = message.TryGetProperty("text", out var textElement) ? ReadElementAsString(textElement) : message.ToString();
                 parsed.Add(new SplunkMessage(type, text));
             }
             else
@@ -132,26 +139,41 @@ internal static class SplunkSearchResultReader
         string.Equals(message.Type, "ERROR", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(message.Type, "FATAL", StringComparison.OrdinalIgnoreCase);
 
-    private static SplunkApiException CreateMalformedResultStreamException(JsonException innerException)
+    private static string ReadElementAsString(JsonElement element) =>
+        element.ValueKind switch
+        {
+            JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+            JsonValueKind.String => element.GetString() ?? string.Empty,
+            _ => element.ToString()
+        };
+
+    private static SplunkResponseFormatException CreateMalformedResultStreamException(JsonException innerException)
     {
-        _ = innerException;
-        var exception = new SplunkApiException(
-            HttpStatusCode.OK,
-            "OK",
-            string.Empty,
-            [new SplunkMessage("ERROR", "Splunk returned malformed JSON in the search result stream.")]);
+        // The inner JsonException carries parser positions, never payload text.
+        var exception = new SplunkResponseFormatException(
+            "Splunk returned malformed JSON in the search result stream.",
+            innerException);
+        SplunkDiagnostics.SetException(System.Diagnostics.Activity.Current, exception);
+        return exception;
+    }
+
+    private static SplunkResponseFormatException CreateInterruptedResultStreamException(Exception innerException)
+    {
+        var exception = new SplunkResponseFormatException(
+            "The Splunk search export stream was interrupted before completion.",
+            innerException);
         SplunkDiagnostics.SetException(System.Diagnostics.Activity.Current, exception);
         return exception;
     }
 
     private static IReadOnlyDictionary<string, JsonElement> CloneFields(JsonElement result)
     {
-        var fields = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        var fields = ImmutableDictionary.CreateBuilder<string, JsonElement>(StringComparer.Ordinal);
         foreach (var property in result.EnumerateObject())
         {
             fields[property.Name] = property.Value.Clone();
         }
 
-        return fields.ToImmutableDictionary(StringComparer.Ordinal);
+        return fields.ToImmutable();
     }
 }

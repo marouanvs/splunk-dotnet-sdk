@@ -1,12 +1,12 @@
-using SplunkSdk;
-using SplunkSdk.Authentication;
-using SplunkSdk.Configuration;
-using SplunkSdk.Mapping;
-using SplunkSdk.Models;
-using SplunkSdk.Search;
+using Marouanvs.Splunk;
+using Marouanvs.Splunk.Authentication;
+using Marouanvs.Splunk.Configuration;
+using Marouanvs.Splunk.Mapping;
+using Marouanvs.Splunk.Models;
+using Marouanvs.Splunk.Search;
 using Xunit;
 
-namespace SplunkSdk.IntegrationTests;
+namespace Marouanvs.Splunk.IntegrationTests;
 
 // These tests exercise the SDK against a real Splunk management endpoint when
 // SPLUNKSDK_INTEGRATION_* environment variables are present. The default local
@@ -16,6 +16,7 @@ public sealed class SplunkIntegrationTests
     // Read-only smoke test for the streaming export path. It runs one bounded
     // generated SPL query against the configured index and validates the row shape.
     [SplunkIntegrationFact]
+    [Trait("Category", "Integration")]
     public async Task ExportCountFromConfiguredIndex()
     {
         var settings = IntegrationSettings.LoadRequired();
@@ -31,6 +32,7 @@ public sealed class SplunkIntegrationTests
     // Read-only smoke test for the job lifecycle path: dispatch a blocking job,
     // then retrieve a bounded page of results through jobs/{sid}/results.
     [SplunkIntegrationFact]
+    [Trait("Category", "Integration")]
     public async Task BlockingJobLifecycleReturnsResults()
     {
         var settings = IntegrationSettings.LoadRequired();
@@ -45,6 +47,7 @@ public sealed class SplunkIntegrationTests
     // Verifies that rows returned by live Splunk can flow through the public
     // typed materialization extension, not only through raw field access.
     [SplunkIntegrationFact]
+    [Trait("Category", "Integration")]
     public async Task TypedMaterializationMapsIntegrationRows()
     {
         var settings = IntegrationSettings.LoadRequired();
@@ -58,6 +61,7 @@ public sealed class SplunkIntegrationTests
     // user. This proves the raw SplunkSearchRequest path against live Splunk
     // without logging the SPL or returned field values.
     [SplunkCustomSplFact]
+    [Trait("Category", "Integration")]
     public async Task RawSplRequestFromEnvironmentReturnsRows()
     {
         var settings = IntegrationSettings.LoadConnectionRequired();
@@ -75,18 +79,22 @@ public sealed class SplunkIntegrationTests
     // Mutation test for saved-search CRUD and dispatch. It creates a unique,
     // unscheduled knowledge object and always attempts cleanup in finally.
     [SplunkMutationFact]
+    [Trait("Category", "Integration")]
+    [Trait("Category", "IntegrationMutate")]
     public async Task SavedSearchMutationLifecycle()
     {
+        AssertMutationsAreEnabledAtExecutionTime();
+
         var settings = IntegrationSettings.LoadRequired();
         using var client = CreateClient(settings);
-        var name = "splunksdk_integration_" + Guid.NewGuid().ToString("N");
+        var name = "marouanvs_splunk_integration_" + Guid.NewGuid().ToString("N");
 
         try
         {
             var created = await client.SavedSearches.CreateAsync(new CreateSavedSearchRequest(name, CountRequest(settings).Search)
             {
                 Namespace = settings.Namespace,
-                Description = "SplunkSdk integration test saved search",
+                Description = "Marouanvs.Splunk integration test saved search",
                 IsScheduled = false,
                 TimeRange = SplunkTimeRange.Last(TimeSpan.FromMinutes(15))
             });
@@ -109,18 +117,22 @@ public sealed class SplunkIntegrationTests
     // Mutation test for alert creation. The alert is created disabled so a test
     // run does not schedule notifications or alert actions in the target stack.
     [SplunkMutationFact]
+    [Trait("Category", "Integration")]
+    [Trait("Category", "IntegrationMutate")]
     public async Task DisabledAlertMutationLifecycle()
     {
+        AssertMutationsAreEnabledAtExecutionTime();
+
         var settings = IntegrationSettings.LoadRequired();
         using var client = CreateClient(settings);
-        var name = "splunksdk_alert_integration_" + Guid.NewGuid().ToString("N");
+        var name = "marouanvs_splunk_alert_integration_" + Guid.NewGuid().ToString("N");
 
         try
         {
             var created = await client.Alerts.CreateAsync(new CreateSplunkAlertRequest(name, CountRequest(settings).Search, "*/15 * * * *")
             {
                 Namespace = settings.Namespace,
-                Description = "SplunkSdk integration test alert",
+                Description = "Marouanvs.Splunk integration test alert",
                 Disabled = true,
                 TimeRange = SplunkTimeRange.Last(TimeSpan.FromMinutes(15)),
                 Alert = new SplunkAlertSettings
@@ -142,6 +154,64 @@ public sealed class SplunkIntegrationTests
         {
             await IgnoreNotFoundAsync(() => client.SavedSearches.DeleteAsync(name, settings.Namespace));
         }
+    }
+
+    // Mutation test for the operational suppression contract: suppress posts
+    // expiration in whole seconds, the suppress endpoint reports the state, and
+    // unsuppress clears it. The alert is created disabled and deleted afterwards.
+    [SplunkMutationFact]
+    [Trait("Category", "Integration")]
+    [Trait("Category", "IntegrationMutate")]
+    public async Task DisabledAlertSuppressionRoundTrip()
+    {
+        AssertMutationsAreEnabledAtExecutionTime();
+
+        var settings = IntegrationSettings.LoadRequired();
+        using var client = CreateClient(settings);
+        var name = "marouanvs_splunk_suppress_integration_" + Guid.NewGuid().ToString("N");
+
+        try
+        {
+            await client.Alerts.CreateAsync(new CreateSplunkAlertRequest(name, CountRequest(settings).Search, "*/15 * * * *")
+            {
+                Namespace = settings.Namespace,
+                Description = "Marouanvs.Splunk integration test alert suppression",
+                Disabled = true,
+                TimeRange = SplunkTimeRange.Last(TimeSpan.FromMinutes(15)),
+                Alert = new SplunkAlertSettings
+                {
+                    AlertType = SplunkAlertType.NumberOfEvents,
+                    Comparator = SplunkAlertComparator.GreaterThan,
+                    Threshold = "0",
+                    Severity = SplunkAlertSeverity.Info,
+                    Track = true
+                }
+            });
+
+            await client.Alerts.SuppressAsync(name, TimeSpan.FromMinutes(5), settings.Namespace);
+            var suppressed = await client.Alerts.GetSuppressionAsync(name, settings.Namespace);
+            Assert.True(suppressed.Suppressed, "Expected the alert to report an active suppression.");
+            Assert.True(suppressed.Expiration > TimeSpan.Zero, "Expected a positive suppression expiration.");
+
+            await client.Alerts.UnsuppressAsync(name, settings.Namespace);
+            var cleared = await client.Alerts.GetSuppressionAsync(name, settings.Namespace);
+            Assert.False(cleared.Suppressed, "Expected the suppression to be cleared.");
+        }
+        finally
+        {
+            await IgnoreNotFoundAsync(() => client.SavedSearches.DeleteAsync(name, settings.Namespace));
+        }
+    }
+
+    // Discovery-time skips on SplunkMutationFactAttribute can go stale when the
+    // environment changes between discovery and execution (for example a runner
+    // that caches discovered tests). Re-check the mutation opt-in at execution
+    // time so a mutation test can never run without SPLUNKSDK_INTEGRATION_MUTATE=1.
+    private static void AssertMutationsAreEnabledAtExecutionTime()
+    {
+        Assert.True(
+            IntegrationSettings.IsMutationEnabled(),
+            "SPLUNKSDK_INTEGRATION_MUTATE=1 must be set at execution time before mutation tests may create or delete saved searches and alerts.");
     }
 
     private static SplunkSearchRequest CountRequest(IntegrationSettings settings) =>

@@ -1,4 +1,4 @@
-namespace SplunkSdk.Mapping;
+namespace Marouanvs.Splunk.Mapping;
 
 /// <summary>
 /// Represents a failure while mapping a Splunk result row to a .NET object.

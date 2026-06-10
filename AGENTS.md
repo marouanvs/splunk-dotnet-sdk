@@ -5,6 +5,7 @@ This repository contains a .NET 10 Splunk SDK. Keep changes focused on productio
 ## Commands
 
 - Build: `dotnet build SplunkSdk.slnx`
+- Format check: `dotnet format SplunkSdk.slnx --verify-no-changes` (CI fails on formatting drift)
 - Tests: `dotnet test tests/SplunkSdk.Tests/SplunkSdk.Tests.csproj`
 - Integration tests: `dotnet test tests/SplunkSdk.IntegrationTests/SplunkSdk.IntegrationTests.csproj` (skips unless env vars are set)
 - Pack: `dotnet pack src/SplunkSdk/SplunkSdk.csproj -c Release -o artifacts/packages` and `dotnet pack src/SplunkSdk.DependencyInjection/SplunkSdk.DependencyInjection.csproj -c Release -o artifacts/packages`

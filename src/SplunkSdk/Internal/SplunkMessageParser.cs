@@ -1,10 +1,21 @@
 using System.Text.Json;
+using System.Xml;
 using System.Xml.Linq;
 
-namespace SplunkSdk;
+namespace Marouanvs.Splunk;
 
 internal static class SplunkMessageParser
 {
+    /// <summary>
+    /// Hardened XML reader settings: DTD processing is prohibited and no resolver is
+    /// used, so external-entity (XXE) payloads in error bodies fail to parse.
+    /// </summary>
+    private static readonly XmlReaderSettings SecureXmlReaderSettings = new()
+    {
+        DtdProcessing = DtdProcessing.Prohibit,
+        XmlResolver = null
+    };
+
     public static IReadOnlyList<SplunkMessage> Parse(string body)
     {
         if (string.IsNullOrWhiteSpace(body))
@@ -51,8 +62,12 @@ internal static class SplunkMessageParser
             {
                 if (message.ValueKind == JsonValueKind.Object)
                 {
-                    var type = message.TryGetProperty("type", out var typeElement) ? typeElement.GetString() ?? string.Empty : string.Empty;
-                    var text = message.TryGetProperty("text", out var textElement) ? textElement.GetString() ?? string.Empty : message.ToString();
+                    var type = message.TryGetProperty("type", out var typeElement)
+                        ? ReadElementAsString(typeElement)
+                        : string.Empty;
+                    var text = message.TryGetProperty("text", out var textElement)
+                        ? ReadElementAsString(textElement)
+                        : message.ToString();
                     parsed.Add(new SplunkMessage(type, text));
                 }
                 else
@@ -73,7 +88,9 @@ internal static class SplunkMessageParser
     {
         try
         {
-            var document = XDocument.Parse(body);
+            using var stringReader = new StringReader(body);
+            using var xmlReader = XmlReader.Create(stringReader, SecureXmlReaderSettings);
+            var document = XDocument.Load(xmlReader);
             return document.Descendants()
                 .Where(element => element.Name.LocalName == "msg")
                 .Select(element => new SplunkMessage(
@@ -81,9 +98,17 @@ internal static class SplunkMessageParser
                     element.Value))
                 .ToArray();
         }
-        catch (System.Xml.XmlException)
+        catch (XmlException)
         {
             return Array.Empty<SplunkMessage>();
         }
     }
+
+    private static string ReadElementAsString(JsonElement element) =>
+        element.ValueKind switch
+        {
+            JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+            JsonValueKind.String => element.GetString() ?? string.Empty,
+            _ => element.ToString()
+        };
 }

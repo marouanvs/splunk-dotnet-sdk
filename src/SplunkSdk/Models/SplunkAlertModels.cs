@@ -1,4 +1,4 @@
-namespace SplunkSdk.Models;
+namespace Marouanvs.Splunk.Models;
 
 /// <summary>
 /// Splunk saved-search alert severity levels.
@@ -167,6 +167,31 @@ public sealed record SplunkAlertSuppressionSettings
     /// Gets fields used for per-result suppression.
     /// </summary>
     public IReadOnlyList<string> Fields { get; init; } = Array.Empty<string>();
+}
+
+/// <summary>
+/// Current suppression state reported by the Splunk saved-search suppress endpoint.
+/// </summary>
+/// <remarks>
+/// This reflects the operational suppression state returned by
+/// <c>saved/searches/{name}/suppress</c>, not the configured
+/// <c>alert.suppress.period</c> stored on the saved search.
+/// </remarks>
+public sealed record SplunkAlertSuppression
+{
+    /// <summary>
+    /// Gets whether the alert is currently suppressed.
+    /// </summary>
+    public required bool Suppressed { get; init; }
+
+    /// <summary>
+    /// Gets the remaining suppression time reported by Splunk.
+    /// </summary>
+    /// <remarks>
+    /// Splunk reports this as whole seconds. The value is
+    /// <see cref="TimeSpan.Zero"/> when the alert is not suppressed.
+    /// </remarks>
+    public TimeSpan Expiration { get; init; }
 }
 
 /// <summary>

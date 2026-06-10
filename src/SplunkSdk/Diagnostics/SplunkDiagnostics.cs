@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
-namespace SplunkSdk.Diagnostics;
+namespace Marouanvs.Splunk.Diagnostics;
 
 /// <summary>
 /// Diagnostic primitives emitted by the SDK.
@@ -11,37 +11,37 @@ public static class SplunkDiagnostics
     /// <summary>
     /// Activity source name for OpenTelemetry or <see cref="ActivityListener"/> integration.
     /// </summary>
-    public const string ActivitySourceName = "SplunkSdk";
+    public const string ActivitySourceName = "Marouanvs.Splunk";
 
     /// <summary>
     /// Meter name for metrics emitted by the SDK.
     /// </summary>
-    public const string MeterName = "SplunkSdk";
+    public const string MeterName = "Marouanvs.Splunk";
 
     /// <summary>
     /// Histogram name for REST request duration in milliseconds.
     /// </summary>
-    public const string RestRequestDurationMetricName = "splunksdk.rest.client.request.duration";
+    public const string RestRequestDurationMetricName = "marouanvs.splunk.rest.client.request.duration";
 
     /// <summary>
     /// Counter name for REST retries.
     /// </summary>
-    public const string RestRetryMetricName = "splunksdk.rest.client.retries";
+    public const string RestRetryMetricName = "marouanvs.splunk.rest.client.retries";
 
     /// <summary>
     /// Counter name for unsuccessful Splunk REST responses.
     /// </summary>
-    public const string RestErrorMetricName = "splunksdk.rest.client.errors";
+    public const string RestErrorMetricName = "marouanvs.splunk.rest.client.errors";
 
     /// <summary>
     /// Histogram name for search operation duration in milliseconds.
     /// </summary>
-    public const string SearchOperationDurationMetricName = "splunksdk.search.operation.duration";
+    public const string SearchOperationDurationMetricName = "marouanvs.splunk.search.operation.duration";
 
     /// <summary>
-    /// Counter name for search result rows read by the SDK.
+    /// Histogram name for search result rows read per search operation.
     /// </summary>
-    public const string SearchRowsMetricName = "splunksdk.search.rows";
+    public const string SearchRowsMetricName = "marouanvs.splunk.search.rows";
 
     internal static readonly ActivitySource ActivitySource = new(ActivitySourceName);
 
@@ -50,7 +50,7 @@ public static class SplunkDiagnostics
     private static readonly Histogram<double> RestRequestDuration = Meter.CreateHistogram<double>(
         RestRequestDurationMetricName,
         unit: "ms",
-        description: "Duration of Splunk REST requests until response headers are received.");
+        description: "Total elapsed time of Splunk REST requests across all retry attempts, including backoff delays.");
 
     private static readonly Counter<long> RestRetries = Meter.CreateCounter<long>(
         RestRetryMetricName,
@@ -65,9 +65,10 @@ public static class SplunkDiagnostics
         unit: "ms",
         description: "Duration of Splunk search operations.");
 
-    private static readonly Counter<long> SearchRows = Meter.CreateCounter<long>(
+    private static readonly Histogram<long> SearchRows = Meter.CreateHistogram<long>(
         SearchRowsMetricName,
-        description: "Number of Splunk search result rows read by the SDK.");
+        unit: "{row}",
+        description: "Number of Splunk search result rows read per search operation.");
 
     internal static void RecordRestRequestDuration(
         TimeSpan duration,
@@ -121,21 +122,24 @@ public static class SplunkDiagnostics
         bool completed,
         int rowCount = 0)
     {
+        // rowCount is retained for source compatibility; row counts are recorded as
+        // histogram values through RecordSearchRows so metric tags stay low-cardinality.
+        _ = rowCount;
+
         SearchOperationDuration.Record(
             duration.TotalMilliseconds,
             new KeyValuePair<string, object?>("splunk.operation", operation),
-            new KeyValuePair<string, object?>("splunk.completed", completed),
-            new KeyValuePair<string, object?>("splunk.result.row_count", rowCount));
+            new KeyValuePair<string, object?>("splunk.completed", completed));
     }
 
     internal static void RecordSearchRows(string operation, int rowCount)
     {
-        if (rowCount <= 0)
+        if (rowCount < 0)
         {
             return;
         }
 
-        SearchRows.Add(
+        SearchRows.Record(
             rowCount,
             new KeyValuePair<string, object?>("splunk.operation", operation));
     }

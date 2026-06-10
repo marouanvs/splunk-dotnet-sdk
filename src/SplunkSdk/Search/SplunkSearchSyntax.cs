@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace SplunkSdk.Models;
+namespace Marouanvs.Splunk.Search;
 
 /// <summary>
 /// Helpers for generating small, safe SPL fragments.
@@ -69,6 +69,15 @@ public static partial class SplunkSearchSyntax
     /// <param name="fieldName">Candidate field name or alias.</param>
     /// <param name="parameterName">Optional parameter name used in thrown exceptions.</param>
     /// <returns>The original field name when it is safe unquoted.</returns>
+    /// <remarks>
+    /// Reserved SPL scoping tokens are rejected case-insensitively
+    /// (<c>earliest</c>, <c>latest</c>, <c>index</c>, <c>splunk_server</c>,
+    /// <c>splunk_server_group</c>) because using them as field names would
+    /// override REST time bounds or index scoping in generated SPL. The
+    /// uppercase boolean operators <c>OR</c>, <c>AND</c>, and <c>NOT</c> are
+    /// rejected exactly because they change boolean logic when unquoted.
+    /// Use raw SPL only for trusted advanced queries.
+    /// </remarks>
     public static string ValidateFieldName(string fieldName, string? parameterName = null)
     {
         if (string.IsNullOrWhiteSpace(fieldName))
@@ -81,6 +90,50 @@ public static partial class SplunkSearchSyntax
             throw new ArgumentException(
                 $"'{fieldName}' is not a safe unquoted SPL field name. Use raw SPL only for trusted advanced queries.",
                 parameterName ?? nameof(fieldName));
+        }
+
+        if (ReservedScopingTokens.Contains(fieldName))
+        {
+            throw new ArgumentException(
+                $"'{fieldName}' is a reserved SPL scoping token and cannot be used as a generated SPL field name because it would override search time bounds or index scoping. Use raw SPL only for trusted advanced queries.",
+                parameterName ?? nameof(fieldName));
+        }
+
+        if (fieldName is "OR" or "AND" or "NOT")
+        {
+            throw new ArgumentException(
+                $"'{fieldName}' is a reserved SPL boolean operator and cannot be used as a generated SPL field name because it would change boolean logic. Use raw SPL only for trusted advanced queries.",
+                parameterName ?? nameof(fieldName));
+        }
+
+        return fieldName;
+    }
+
+    /// <summary>
+    /// Validates a Splunk field name used as a REST result field projection value.
+    /// </summary>
+    /// <param name="fieldName">Candidate field name.</param>
+    /// <param name="parameterName">Parameter name used in thrown exceptions.</param>
+    /// <returns>The original field name when it is identifier-shaped.</returns>
+    /// <remarks>
+    /// Projection values are sent as repeated <c>f</c> REST query parameters and
+    /// never enter generated SPL, so reserved SPL scoping tokens such as
+    /// <c>index</c> and <c>splunk_server</c> are legitimate here: they are
+    /// default fields present on every Splunk event row. Only the
+    /// identifier-shape check applies.
+    /// </remarks>
+    internal static string ValidateResultFieldName(string fieldName, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(fieldName))
+        {
+            throw new ArgumentException("A Splunk field name is required.", parameterName);
+        }
+
+        if (!FieldNameRegex().IsMatch(fieldName))
+        {
+            throw new ArgumentException(
+                $"'{fieldName}' is not a safe unquoted SPL field name. Use raw SPL only for trusted advanced queries.",
+                parameterName);
         }
 
         return fieldName;
@@ -107,12 +160,23 @@ public static partial class SplunkSearchSyntax
         return span;
     }
 
-    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9_-]*$", RegexOptions.CultureInvariant)]
+    // \A...\z anchors are intentional: unlike $, \z does not tolerate a trailing
+    // newline, so values such as "main\n" cannot pass validation.
+    [GeneratedRegex(@"\A[A-Za-z0-9][A-Za-z0-9_-]*\z", RegexOptions.CultureInvariant)]
     private static partial Regex IndexNameRegex();
 
-    [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_.:]*$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\A[A-Za-z_][A-Za-z0-9_.:]*\z", RegexOptions.CultureInvariant)]
     private static partial Regex FieldNameRegex();
 
-    [GeneratedRegex(@"^[1-9][0-9]*(s|sec|secs|m|min|mins|h|hr|hrs|d|day|days|w|week|weeks)$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\A[1-9][0-9]*(s|sec|secs|m|min|mins|h|hr|hrs|d|day|days|w|week|weeks)\z", RegexOptions.CultureInvariant)]
     private static partial Regex SpanRegex();
+
+    private static readonly HashSet<string> ReservedScopingTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "earliest",
+        "latest",
+        "index",
+        "splunk_server",
+        "splunk_server_group"
+    };
 }

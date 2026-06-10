@@ -1,4 +1,4 @@
-namespace SplunkSdk.Authentication;
+namespace Marouanvs.Splunk.Authentication;
 
 /// <summary>
 /// Authentication header schemes supported by Splunk token authentication.

@@ -1,14 +1,23 @@
 using System.Globalization;
-using System.Net;
 using System.Text.Json;
 using System.Xml.Linq;
 using System.Xml;
-using SplunkSdk.Models;
+using Marouanvs.Splunk.Models;
 
-namespace SplunkSdk;
+namespace Marouanvs.Splunk;
 
 internal static class SplunkAtomFeedParser
 {
+    /// <summary>
+    /// Hardened XML reader settings: DTD processing is prohibited and no resolver is
+    /// used, so external-entity (XXE) payloads in response bodies fail to parse.
+    /// </summary>
+    private static readonly XmlReaderSettings SecureXmlReaderSettings = new()
+    {
+        DtdProcessing = DtdProcessing.Prohibit,
+        XmlResolver = null
+    };
+
     public static IReadOnlyList<SplunkSavedSearch> ParseSavedSearches(string body)
     {
         if (string.IsNullOrWhiteSpace(body))
@@ -27,7 +36,8 @@ internal static class SplunkAtomFeedParser
             return ParseXmlSavedSearches(body);
         }
 
-        return Array.Empty<SplunkSavedSearch>();
+        throw new SplunkResponseFormatException(
+            "Splunk returned a saved search response that is neither JSON nor XML.");
     }
 
     private static IReadOnlyList<SplunkSavedSearch> ParseJsonSavedSearches(string body)
@@ -80,7 +90,7 @@ internal static class SplunkAtomFeedParser
     {
         try
         {
-            var document = XDocument.Parse(body);
+            var document = LoadXml(body);
             var searches = new List<SplunkSavedSearch>();
             foreach (var entry in document.Descendants().Where(element => element.Name.LocalName == "entry"))
             {
@@ -90,13 +100,23 @@ internal static class SplunkAtomFeedParser
                     continue;
                 }
 
+                // Only direct children of the entry's content dict are top-level
+                // saved-search keys. Descendant keys belong to nested structures
+                // (for example eai:acl) and must not surface as top-level entries.
                 var content = new Dictionary<string, string>(StringComparer.Ordinal);
-                foreach (var key in entry.Descendants().Where(element => element.Name.LocalName == "key"))
+                var contentDict = entry.Elements()
+                    .FirstOrDefault(element => element.Name.LocalName == "content")?
+                    .Elements()
+                    .FirstOrDefault(element => element.Name.LocalName == "dict");
+                if (contentDict is not null)
                 {
-                    var keyName = key.Attribute("name")?.Value;
-                    if (!string.IsNullOrWhiteSpace(keyName) && !content.ContainsKey(keyName))
+                    foreach (var key in contentDict.Elements().Where(element => element.Name.LocalName == "key"))
                     {
-                        content[keyName] = key.Value;
+                        var keyName = key.Attribute("name")?.Value;
+                        if (!string.IsNullOrWhiteSpace(keyName) && !content.ContainsKey(keyName))
+                        {
+                            content[keyName] = ReadXmlKeyValue(key);
+                        }
                     }
                 }
 
@@ -111,15 +131,27 @@ internal static class SplunkAtomFeedParser
         }
     }
 
-    private static SplunkApiException CreateMalformedSavedSearchResponseException(string format, Exception innerException)
+    private static XDocument LoadXml(string body)
     {
-        _ = innerException;
-        return new SplunkApiException(
-            HttpStatusCode.OK,
-            "OK",
-            string.Empty,
-            [new SplunkMessage("ERROR", $"Splunk returned malformed {format} for a saved search response.")]);
+        using var stringReader = new StringReader(body);
+        using var xmlReader = XmlReader.Create(stringReader, SecureXmlReaderSettings);
+        return XDocument.Load(xmlReader);
     }
+
+    /// <summary>
+    /// Reads a content key value. Leaf keys map to their text; keys holding nested
+    /// structures (dicts or lists) are serialized to a string, mirroring how the
+    /// JSON path stringifies nested objects and arrays.
+    /// </summary>
+    private static string ReadXmlKeyValue(XElement key) =>
+        key.HasElements
+            ? string.Concat(key.Nodes().Select(node => node.ToString(SaveOptions.DisableFormatting))).Trim()
+            : key.Value;
+
+    private static SplunkResponseFormatException CreateMalformedSavedSearchResponseException(string format, Exception innerException) =>
+        new(
+            $"Splunk returned malformed {format} for a saved search response.",
+            innerException);
 
     private static SplunkSavedSearch ToSavedSearch(string name, IReadOnlyDictionary<string, string> content)
     {
@@ -196,9 +228,7 @@ internal static class SplunkAtomFeedParser
             Comparator = SplunkEnumExtensions.TryParseAlertComparator(comparator),
             Threshold = threshold,
             Condition = condition,
-            Severity = int.TryParse(severity, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedSeverity)
-                ? (SplunkAlertSeverity?)parsedSeverity
-                : null,
+            Severity = TryParseAlertSeverity(severity),
             Expires = expires,
             Track = GetBool(content, "alert.track"),
             DigestMode = GetBool(content, "alert.digest_mode"),
@@ -210,6 +240,17 @@ internal static class SplunkAtomFeedParser
                 : actions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         };
     }
+
+    /// <summary>
+    /// Parses an <c>alert.severity</c> value and returns <see langword="null"/> for
+    /// values outside the documented savedsearches.conf 1-6 scale instead of
+    /// producing an undefined enum value.
+    /// </summary>
+    private static SplunkAlertSeverity? TryParseAlertSeverity(string? value) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) &&
+        Enum.IsDefined((SplunkAlertSeverity)parsed)
+            ? (SplunkAlertSeverity)parsed
+            : null;
 
     private static SplunkAlertSuppressionSettings? ToSuppressionSettings(IReadOnlyDictionary<string, string> content)
     {

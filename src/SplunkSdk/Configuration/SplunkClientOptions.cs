@@ -1,8 +1,9 @@
+using System.Net.Http.Headers;
 using System.Reflection;
-using SplunkSdk.Authentication;
-using SplunkSdk.Models;
+using Marouanvs.Splunk.Authentication;
+using Marouanvs.Splunk.Models;
 
-namespace SplunkSdk.Configuration;
+namespace Marouanvs.Splunk.Configuration;
 
 /// <summary>
 /// Runtime configuration for <see cref="SplunkClient"/>.
@@ -19,7 +20,8 @@ public sealed class SplunkClientOptions
     /// </summary>
     /// <remarks>
     /// This is the Splunk management REST endpoint, not the Splunk Web UI port.
-    /// Splunk Enterprise commonly uses port <c>8089</c>.
+    /// Splunk Enterprise commonly uses port <c>8089</c>. Plain <c>http://</c>
+    /// URIs are rejected unless <see cref="AllowInsecureHttp"/> is enabled.
     /// </remarks>
     public required Uri ManagementUri { get; init; }
 
@@ -64,7 +66,39 @@ public sealed class SplunkClientOptions
     /// <summary>
     /// Gets or sets a user agent appended to SDK requests.
     /// </summary>
+    /// <remarks>
+    /// The value must be a valid HTTP <c>User-Agent</c> header value, for example
+    /// <c>MyApp/1.0</c>. Invalid values fail validation with a
+    /// <see cref="SplunkConfigurationException"/> when the client is created.
+    /// </remarks>
     public string UserAgent { get; init; } = CreateDefaultUserAgent();
+
+    /// <summary>
+    /// Gets or sets a value indicating whether plain <c>http://</c> management URIs are allowed.
+    /// Defaults to <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// This switch is for local labs only. Splunk tokens are sent in the
+    /// <c>Authorization</c> header on every request, so a plain HTTP management URI
+    /// exposes the credential in cleartext on the network. Keep this disabled and use
+    /// <c>https://</c> for any shared, production, or Splunk Cloud deployment.
+    /// </remarks>
+    public bool AllowInsecureHttp { get; init; }
+
+    /// <summary>
+    /// Gets or sets the request timeout applied to the SDK-owned <see cref="HttpClient"/>
+    /// created by <see cref="SplunkClient.Create"/>. When unset, the
+    /// <see cref="HttpClient"/> default of 100 seconds applies.
+    /// </summary>
+    /// <remarks>
+    /// Blocking search submissions (<c>exec_mode=blocking</c>) hold the HTTP request open
+    /// until the search finishes, so slow searches can exceed the 100-second default;
+    /// raise this value for long-running blocking searches. The value must be greater
+    /// than zero. This option is ignored for caller-owned <see cref="HttpClient"/>
+    /// instances passed to the <see cref="SplunkClient(HttpClient, SplunkClientOptions)"/>
+    /// constructor — configure <see cref="HttpClient.Timeout"/> directly in that case.
+    /// </remarks>
+    public TimeSpan? Timeout { get; init; }
 
     /// <summary>
     /// Creates options from a management endpoint and static token.
@@ -94,8 +128,26 @@ public sealed class SplunkClientOptions
         }
     }
 
-    internal void Validate()
+    /// <summary>
+    /// Validates the configured options and throws when a value is missing or invalid.
+    /// </summary>
+    /// <exception cref="SplunkConfigurationException">
+    /// A required value is missing or a configured value is invalid, for example a plain
+    /// HTTP management URI without <see cref="AllowInsecureHttp"/>, an unparseable
+    /// <see cref="UserAgent"/>, a non-positive <see cref="Timeout"/>, or invalid
+    /// <see cref="Retry"/> settings.
+    /// </exception>
+    /// <remarks>
+    /// <see cref="SplunkClient.Create"/> calls this automatically. Hosting integrations,
+    /// such as options validators, can call it directly to fail fast at startup.
+    /// </remarks>
+    public void Validate()
     {
+        if (ManagementUri is null)
+        {
+            throw new SplunkConfigurationException("A Splunk management URI is required.");
+        }
+
         if (!ManagementUri.IsAbsoluteUri)
         {
             throw new SplunkConfigurationException("The Splunk management URI must be absolute.");
@@ -104,6 +156,12 @@ public sealed class SplunkClientOptions
         if (ManagementUri.Scheme != Uri.UriSchemeHttps && ManagementUri.Scheme != Uri.UriSchemeHttp)
         {
             throw new SplunkConfigurationException("The Splunk management URI must use HTTP or HTTPS.");
+        }
+
+        if (ManagementUri.Scheme == Uri.UriSchemeHttp && !AllowInsecureHttp)
+        {
+            throw new SplunkConfigurationException(
+                "The Splunk management URI uses plain HTTP, which sends the Splunk token unencrypted. Use an https:// management URI, or set AllowInsecureHttp to true for local lab use only.");
         }
 
         if (TokenProvider is null)
@@ -116,7 +174,30 @@ public sealed class SplunkClientOptions
             throw new SplunkConfigurationException("The user agent must not be empty.");
         }
 
+        try
+        {
+            _ = ParseUserAgentValues(UserAgent);
+        }
+        catch (FormatException exception)
+        {
+            throw new SplunkConfigurationException(
+                "The user agent must be a valid HTTP User-Agent header value, for example \"MyApp/1.0\".",
+                exception);
+        }
+
+        if (Timeout is { } timeout && timeout <= TimeSpan.Zero)
+        {
+            throw new SplunkConfigurationException("Timeout must be greater than zero when set.");
+        }
+
         Retry.Validate();
+    }
+
+    internal static ProductInfoHeaderValue[] ParseUserAgentValues(string userAgent)
+    {
+        using var probe = new HttpRequestMessage();
+        probe.Headers.UserAgent.ParseAdd(userAgent);
+        return probe.Headers.UserAgent.ToArray();
     }
 
     private static string CreateDefaultUserAgent()
@@ -134,6 +215,6 @@ public sealed class SplunkClientOptions
             ? "0.0.0"
             : version.Split('+', 2)[0];
 
-        return $"SplunkSdk/{version}";
+        return $"Marouanvs.Splunk/{version}";
     }
 }

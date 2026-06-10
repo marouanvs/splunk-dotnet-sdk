@@ -1,4 +1,4 @@
-namespace SplunkSdk.Authentication;
+namespace Marouanvs.Splunk.Authentication;
 
 /// <summary>
 /// Supplies Splunk authentication tokens for outbound REST calls.

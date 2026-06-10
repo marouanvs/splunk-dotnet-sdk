@@ -1,12 +1,12 @@
-using SplunkSdk.Models;
+using Marouanvs.Splunk.Models;
 
-namespace SplunkSdk.Analytics;
+namespace Marouanvs.Splunk.Analytics;
 
 /// <summary>
 /// High-level analytics helpers for common operational metrics.
 /// </summary>
 /// <remarks>
-/// These helpers generate scoped SPL with <see cref="SplunkSdk.Search.SplunkQueryBuilder"/>
+/// These helpers generate scoped SPL with <see cref="Marouanvs.Splunk.Search.SplunkQueryBuilder"/>
 /// and are the preferred entry point when application/user input is assembled
 /// into a query.
 /// </remarks>
@@ -31,7 +31,7 @@ public interface ISplunkAnalyticsClient
     /// <summary>
     /// Returns a time-bucketed average series for a numeric metric field.
     /// </summary>
-    /// <param name="query">Index, numeric field, timechart span, filters, and time range.</param>
+    /// <param name="query">Index, numeric field, timechart span, filters, optional trusted raw predicate, and time range.</param>
     /// <param name="cancellationToken">Cancellation token for the export request.</param>
     /// <returns>Ordered time buckets returned by Splunk.</returns>
     Task<IReadOnlyList<MetricTimeBucket>> AverageTimeSeriesAsync(

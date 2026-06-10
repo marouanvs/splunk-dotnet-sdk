@@ -1,21 +1,31 @@
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using SplunkSdk.Models;
+using Marouanvs.Splunk.Models;
 
-namespace SplunkSdk.Mapping;
+namespace Marouanvs.Splunk.Mapping;
 
 /// <summary>
 /// Maps Splunk search result rows to typed DTOs.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Mapping uses public writable properties. Field names are resolved from
 /// <see cref="SplunkFieldAttribute"/>, then <see cref="JsonPropertyNameAttribute"/>,
-/// then the property name.
+/// then the property name. All value conversions use the invariant culture.
+/// </para>
+/// <para>
+/// <see cref="DateTime"/> values are normalized to UTC for deterministic results
+/// across host time zones: values without an offset are assumed to be UTC, values
+/// with an offset are converted to UTC, and the mapped value always has
+/// <see cref="DateTimeKind.Utc"/>. Use <see cref="DateTimeOffset"/> properties to
+/// preserve the original offset.
+/// </para>
 /// </remarks>
 public static class SplunkSearchResultMappingExtensions
 {
@@ -32,7 +42,7 @@ public static class SplunkSearchResultMappingExtensions
     {
         ArgumentNullException.ThrowIfNull(result);
 
-        var instance = new T();
+        object instance = new T();
         foreach (var property in GetPropertyMaps(typeof(T)))
         {
             if (!result.Fields.TryGetValue(property.FieldName, out var fieldValue))
@@ -41,10 +51,10 @@ public static class SplunkSearchResultMappingExtensions
             }
 
             var converted = ConvertValue(fieldValue, property.Property.PropertyType, property.FieldName, property.Property.Name);
-            property.Property.SetValue(instance, converted);
+            property.Setter(instance, converted);
         }
 
-        return instance;
+        return (T)instance;
     }
 
     /// <summary>
@@ -85,14 +95,36 @@ public static class SplunkSearchResultMappingExtensions
             type,
             static mappedType => mappedType
                 .GetProperties(BindingFlags.Instance | BindingFlags.Public)
-                .Where(property => property.CanWrite && property.SetMethod?.IsPublic == true)
-                .Select(property => new PropertyMap(property, GetFieldName(property)))
+                .Where(property => property.GetIndexParameters().Length == 0 &&
+                                   property.CanWrite &&
+                                   property.SetMethod?.IsPublic == true)
+                .Select(property => new PropertyMap(property, GetFieldName(property), CreateSetter(property)))
                 .ToArray());
 
     private static string GetFieldName(PropertyInfo property) =>
         property.GetCustomAttribute<SplunkFieldAttribute>()?.Name ??
         property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name ??
         property.Name;
+
+    /// <summary>
+    /// Compiles a setter delegate so mapping rows avoids per-row
+    /// <see cref="PropertyInfo.SetValue(object?, object?)"/> reflection overhead.
+    /// Value-type instances are unboxed by reference so the boxed instance held by
+    /// <see cref="ToObject{T}(SplunkSearchResult)"/> is mutated in place.
+    /// </summary>
+    private static Action<object, object?> CreateSetter(PropertyInfo property)
+    {
+        var declaringType = property.DeclaringType!;
+        var instanceParameter = Expression.Parameter(typeof(object), "instance");
+        var valueParameter = Expression.Parameter(typeof(object), "value");
+        var typedInstance = declaringType.IsValueType
+            ? (Expression)Expression.Unbox(instanceParameter, declaringType)
+            : Expression.Convert(instanceParameter, declaringType);
+        var assignment = Expression.Assign(
+            Expression.Property(typedInstance, property),
+            Expression.Convert(valueParameter, property.PropertyType));
+        return Expression.Lambda<Action<object, object?>>(assignment, instanceParameter, valueParameter).Compile();
+    }
 
     private static object? ConvertValue(JsonElement value, Type targetType, string fieldName, string propertyName)
     {
@@ -164,14 +196,54 @@ public static class SplunkSearchResultMappingExtensions
                 return long.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture);
             }
 
+            if (effectiveType == typeof(short))
+            {
+                return short.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture);
+            }
+
+            if (effectiveType == typeof(byte))
+            {
+                return byte.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture);
+            }
+
+            if (effectiveType == typeof(sbyte))
+            {
+                return sbyte.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture);
+            }
+
+            if (effectiveType == typeof(ushort))
+            {
+                return ushort.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture);
+            }
+
+            if (effectiveType == typeof(uint))
+            {
+                return uint.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture);
+            }
+
+            if (effectiveType == typeof(ulong))
+            {
+                return ulong.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture);
+            }
+
             if (effectiveType == typeof(double))
             {
                 return double.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture);
             }
 
+            if (effectiveType == typeof(float))
+            {
+                return float.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture);
+            }
+
             if (effectiveType == typeof(decimal))
             {
                 return decimal.Parse(text, NumberStyles.Number, CultureInfo.InvariantCulture);
+            }
+
+            if (effectiveType == typeof(char))
+            {
+                return char.Parse(text);
             }
 
             if (effectiveType == typeof(DateTimeOffset))
@@ -181,7 +253,25 @@ public static class SplunkSearchResultMappingExtensions
 
             if (effectiveType == typeof(DateTime))
             {
-                return DateTime.Parse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
+                return DateTime.Parse(
+                    text,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
+            }
+
+            if (effectiveType == typeof(DateOnly))
+            {
+                return DateOnly.Parse(text, CultureInfo.InvariantCulture);
+            }
+
+            if (effectiveType == typeof(TimeOnly))
+            {
+                return TimeOnly.Parse(text, CultureInfo.InvariantCulture);
+            }
+
+            if (effectiveType == typeof(TimeSpan))
+            {
+                return TimeSpan.Parse(text, CultureInfo.InvariantCulture);
             }
 
             if (effectiveType == typeof(Guid))
@@ -191,7 +281,15 @@ public static class SplunkSearchResultMappingExtensions
 
             if (effectiveType.IsEnum)
             {
-                return Enum.Parse(effectiveType, text, ignoreCase: true);
+                var parsed = Enum.Parse(effectiveType, text, ignoreCase: true);
+                if (!effectiveType.IsDefined(typeof(FlagsAttribute), inherit: false) &&
+                    !Enum.IsDefined(effectiveType, parsed))
+                {
+                    throw new SplunkMappingException(
+                        $"Could not map Splunk field '{fieldName}' to property '{propertyName}' ({FriendlyName(targetType)}) because the value is not a defined '{FriendlyName(effectiveType)}' value.");
+                }
+
+                return parsed;
             }
         }
         catch (Exception ex) when (ex is FormatException or OverflowException or ArgumentException)
@@ -209,8 +307,11 @@ public static class SplunkSearchResultMappingExtensions
     {
         if (!TryGetSupportedCollectionElementType(targetType, out var elementType))
         {
-            throw new SplunkMappingException(
-                $"Could not map multi-value Splunk field '{fieldName}' to scalar property '{propertyName}' ({FriendlyName(targetType)}).");
+            throw targetType != typeof(string) && typeof(IEnumerable).IsAssignableFrom(targetType)
+                ? new SplunkMappingException(
+                    $"Could not map multi-value Splunk field '{fieldName}' to property '{propertyName}' because '{FriendlyName(targetType)}' is an unsupported collection type.")
+                : new SplunkMappingException(
+                    $"Could not map multi-value Splunk field '{fieldName}' to scalar property '{propertyName}' ({FriendlyName(targetType)}).");
         }
 
         var listType = typeof(List<>).MakeGenericType(elementType);
@@ -283,5 +384,5 @@ public static class SplunkSearchResultMappingExtensions
     private static string FriendlyName(Type type) =>
         string.IsNullOrWhiteSpace(type.Name) ? type.FullName ?? "unknown" : type.Name;
 
-    private sealed record PropertyMap(PropertyInfo Property, string FieldName);
+    private sealed record PropertyMap(PropertyInfo Property, string FieldName, Action<object, object?> Setter);
 }

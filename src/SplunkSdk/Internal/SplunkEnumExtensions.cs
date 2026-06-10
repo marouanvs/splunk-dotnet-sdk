@@ -1,7 +1,7 @@
-using SplunkSdk.Authentication;
-using SplunkSdk.Models;
+using Marouanvs.Splunk.Authentication;
+using Marouanvs.Splunk.Models;
 
-namespace SplunkSdk;
+namespace Marouanvs.Splunk;
 
 internal static class SplunkEnumExtensions
 {
@@ -30,6 +30,7 @@ internal static class SplunkEnumExtensions
         {
             SplunkExecutionMode.Normal => "normal",
             SplunkExecutionMode.Blocking => "blocking",
+            SplunkExecutionMode.Oneshot => "oneshot",
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
         };
 

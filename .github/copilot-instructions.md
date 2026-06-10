@@ -32,6 +32,7 @@ This repository contains a .NET 10 Splunk SDK. Keep generated code production-or
 ## Verification
 
 - Build with `dotnet build SplunkSdk.slnx`.
+- Verify formatting with `dotnet format SplunkSdk.slnx --verify-no-changes`; CI fails on formatting drift.
 - Run tests with `dotnet test tests/SplunkSdk.Tests/SplunkSdk.Tests.csproj`.
 - Run integration tests with `dotnet test tests/SplunkSdk.IntegrationTests/SplunkSdk.IntegrationTests.csproj`; they skip unless env vars are set.
 - Smoke-check benchmarks with `dotnet run -c Release --project benchmarks/SplunkSdk.Benchmarks -- --filter "*QueryBuilderBenchmarks*" --job Dry`.
